@@ -14,5 +14,6 @@ use worker::{console_error, event, Env, ScheduleContext, ScheduledEvent};
 pub async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
     if let Err(e) = ingest::ingest_all(&env).await {
         console_error!("ingest_all failed: {}", e);
+        panic!("{}", e);
     }
 }
