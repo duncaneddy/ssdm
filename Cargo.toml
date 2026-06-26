@@ -1,0 +1,15 @@
+[package]
+name = "ssdm"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# worker only compiles for the wasm target, so host `cargo test` skips it.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+worker = "0.5"
+
+[profile.release]
+opt-level = "s"
+lto = true
