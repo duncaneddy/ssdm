@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use rusty_s3::actions::PutObject;
+use rusty_s3::actions::{GetObject, PutObject};
 use rusty_s3::{Bucket, Credentials, S3Action, UrlStyle};
 
 use crate::config::Config;
@@ -66,5 +66,25 @@ impl Store for R2Store {
             return Err(anyhow!("R2 PUT {key} failed: {status} {body}"));
         }
         Ok(())
+    }
+
+    async fn get(&self, key: &str) -> Result<Option<Vec<u8>>> {
+        let action: GetObject = self.bucket.get_object(Some(&self.creds), key);
+        let url = action.sign(SIGN_TTL);
+
+        let resp = self.client.get(url).send().await?;
+        let status = resp.status();
+        if status == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        if !status.is_success() {
+            let body = resp
+                .bytes()
+                .await
+                .map(|b| String::from_utf8_lossy(&b[..b.len().min(4096)]).into_owned())
+                .unwrap_or_default();
+            return Err(anyhow!("R2 GET {key} failed: {status} {body}"));
+        }
+        Ok(Some(resp.bytes().await?.to_vec()))
     }
 }

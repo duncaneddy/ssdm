@@ -63,6 +63,10 @@ pub async fn run() -> anyhow::Result<()> {
             let mut rate = RateLimiter::new(cfg.host_min_interval, cfg.stagger_jitter);
             let now = crate::scheduler::now_ms();
 
+            // Seed local status from R2 on a fresh volume so a partial sync
+            // merges into the existing set instead of truncating status.json.
+            crate::sync::bootstrap_status(&store, &cfg.data_dir).await;
+
             let process: Vec<&Product> = if !product.is_empty() {
                 select_products(&items, &product)?
             } else if all {

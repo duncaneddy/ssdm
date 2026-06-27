@@ -24,6 +24,41 @@ pub trait Fetcher {
 #[allow(async_fn_in_trait)]
 pub trait Store {
     async fn put(&self, key: &str, bytes: Vec<u8>, content_type: &str) -> anyhow::Result<()>;
+    /// Fetch an object's bytes, or `None` if it does not exist (404).
+    async fn get(&self, key: &str) -> anyhow::Result<Option<Vec<u8>>>;
+}
+
+const STATUS_KEY: &str = "status.json";
+const STATUS_CT: &str = "application/json";
+
+/// Seed the local `status.json` from R2 when the local copy is missing/empty.
+///
+/// The daemon treats the local volume as the source of truth and uploads the
+/// whole map on every pass. On a fresh volume that would clobber an existing
+/// remote `status.json` (e.g. during migration, or a single-product test) down
+/// to only the just-synced products. Seeding the local map from R2 first makes
+/// partial syncs merge into the existing set instead of truncating it.
+///
+/// Best-effort: any R2 error is logged and ignored (the daemon still works, it
+/// just falls back to re-populating via a full pass).
+pub async fn bootstrap_status<S: Store>(store: &S, data_dir: &Path) {
+    if !load_status(data_dir).is_empty() {
+        return; // local already has state — nothing to seed
+    }
+    match store.get(STATUS_KEY).await {
+        Ok(Some(bytes)) => {
+            let remote = crate::status::parse_status(&bytes);
+            if remote.is_empty() {
+                return;
+            }
+            match save_status(data_dir, &remote) {
+                Ok(()) => info!("bootstrapped local status.json from R2 ({} entries)", remote.len()),
+                Err(e) => warn!("failed to write bootstrapped status.json: {e}"),
+            }
+        }
+        Ok(None) => info!("no remote status.json to bootstrap from; starting fresh"),
+        Err(e) => warn!("status.json bootstrap from R2 failed (continuing): {e}"),
+    }
 }
 
 #[derive(Default, Debug, PartialEq)]
@@ -80,7 +115,7 @@ pub async fn run_sync<F: Fetcher, S: Store>(
             warn!("status persist failed after {key}: {e}");
         }
         let status_body = crate::status::serialize_status(&status).into_bytes();
-        if let Err(e) = store.put("status.json", status_body, "application/json").await {
+        if let Err(e) = store.put(STATUS_KEY, status_body, STATUS_CT).await {
             warn!("status.json upload failed after {key}: {e}");
         }
     }
@@ -131,12 +166,16 @@ mod tests {
 
     #[derive(Default)]
     struct FakeStore {
-        puts: Mutex<Vec<String>>, // keys put
+        puts: Mutex<Vec<String>>,    // keys put
+        get_body: Option<Vec<u8>>,   // bytes returned by get(), None => 404
     }
     impl Store for FakeStore {
         async fn put(&self, key: &str, _bytes: Vec<u8>, _ct: &str) -> anyhow::Result<()> {
             self.puts.lock().unwrap().push(key.to_string());
             Ok(())
+        }
+        async fn get(&self, _key: &str) -> anyhow::Result<Option<Vec<u8>>> {
+            Ok(self.get_body.clone())
         }
     }
 
@@ -250,5 +289,50 @@ mod tests {
         assert_eq!(bad_entry.last_attempt, 1000, "failed attempt advances last_attempt");
         // good product persisted.
         assert!(st.keys().any(|k| k.contains("active/latest")));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_seeds_local_status_from_r2_when_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        // Remote status.json with two entries.
+        let mut remote = crate::status::Status::new();
+        crate::status::apply_update(&mut remote, "a/latest/a.json", "h1", 1, 100);
+        crate::status::apply_update(&mut remote, "b/latest/b.json", "h2", 2, 200);
+        let store = FakeStore {
+            get_body: Some(crate::status::serialize_status(&remote).into_bytes()),
+            ..Default::default()
+        };
+
+        // Local is empty → bootstrap pulls the remote map down.
+        assert!(crate::local::load_status(dir.path()).is_empty());
+        bootstrap_status(&store, dir.path()).await;
+        assert_eq!(crate::local::load_status(dir.path()), remote);
+    }
+
+    #[tokio::test]
+    async fn bootstrap_is_noop_when_local_already_has_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut local = crate::status::Status::new();
+        crate::status::apply_update(&mut local, "local/latest/x.json", "lh", 9, 1);
+        crate::local::save_status(dir.path(), &local).unwrap();
+
+        // Remote has different state; bootstrap must NOT overwrite a non-empty local.
+        let mut remote = crate::status::Status::new();
+        crate::status::apply_update(&mut remote, "remote/latest/y.json", "rh", 5, 2);
+        let store = FakeStore {
+            get_body: Some(crate::status::serialize_status(&remote).into_bytes()),
+            ..Default::default()
+        };
+
+        bootstrap_status(&store, dir.path()).await;
+        assert_eq!(crate::local::load_status(dir.path()), local, "non-empty local untouched");
+    }
+
+    #[tokio::test]
+    async fn bootstrap_handles_missing_remote() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FakeStore::default(); // get_body None => 404
+        bootstrap_status(&store, dir.path()).await;
+        assert!(crate::local::load_status(dir.path()).is_empty(), "stays empty when no remote");
     }
 }

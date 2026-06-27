@@ -31,7 +31,9 @@ cargo run -- daemon        # run the scheduler loop
 ```
 
 Configuration is via environment variables (see `.env.example`). Copy it to
-`.env` and fill in the R2 credentials.
+`.env` and fill in the R2 credentials; the binary loads `.env` automatically.
+For a local `cargo run`, also set `DATA_DIR` to a writable local path (e.g.
+`DATA_DIR=./data`) — the default `/data` is the Docker volume mount.
 
 ## R2 setup (one-time)
 
