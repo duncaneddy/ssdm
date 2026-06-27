@@ -1,4 +1,5 @@
 pub mod keys;
+pub mod message;
 pub mod page;
 pub mod products;
 
