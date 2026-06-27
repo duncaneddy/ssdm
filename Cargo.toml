@@ -13,7 +13,7 @@ md5 = "0.7"
 
 # worker + wasm-only helpers; host `cargo test` skips these.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-worker = "0.8"
+worker = { version = "0.8", features = ["queue"] }
 futures-util = "0.3"
 
 [profile.release]

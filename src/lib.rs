@@ -12,6 +12,9 @@ mod fetch;
 mod ingest;
 
 #[cfg(target_arch = "wasm32")]
+mod producer;
+
+#[cfg(target_arch = "wasm32")]
 use worker::{console_error, event, Env, Result, ScheduleContext, ScheduledEvent};
 
 /// Cron entrypoint: runs the full ingest once per scheduled trigger.
