@@ -10,7 +10,6 @@ use rusty_s3::{Bucket, Credentials, S3Action, UrlStyle};
 use crate::config::Config;
 use crate::sync::Store;
 
-const CACHE_CONTROL: &str = "public, max-age=3600";
 const SIGN_TTL: Duration = Duration::from_secs(300);
 
 pub struct R2Store {
@@ -37,11 +36,11 @@ impl R2Store {
 }
 
 impl Store for R2Store {
-    async fn put(&self, key: &str, bytes: Vec<u8>, content_type: &str) -> Result<()> {
+    async fn put(&self, key: &str, bytes: Vec<u8>, content_type: &str, cache_control: &str) -> Result<()> {
         // Single source of truth for the two object headers so the signed and
         // sent values cannot drift apart (a mismatch would be a 403 from R2).
         let ct = content_type;
-        let cc = CACHE_CONTROL;
+        let cc = cache_control;
 
         let mut action: PutObject = self.bucket.put_object(Some(&self.creds), key);
         action.headers_mut().insert("content-type", ct);

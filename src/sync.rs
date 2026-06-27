@@ -23,13 +23,20 @@ pub trait Fetcher {
 
 #[allow(async_fn_in_trait)]
 pub trait Store {
-    async fn put(&self, key: &str, bytes: Vec<u8>, content_type: &str) -> anyhow::Result<()>;
+    async fn put(&self, key: &str, bytes: Vec<u8>, content_type: &str, cache_control: &str) -> anyhow::Result<()>;
     /// Fetch an object's bytes, or `None` if it does not exist (404).
     async fn get(&self, key: &str) -> anyhow::Result<Option<Vec<u8>>>;
 }
 
 const STATUS_KEY: &str = "status.json";
 const STATUS_CT: &str = "application/json";
+
+/// Long cache for data files and the page shell — they change rarely and the
+/// CDN should hold them.
+const DATA_CACHE: &str = "public, max-age=3600";
+/// Short cache for status.json: it changes every pass and the landing page reads
+/// it on each load for freshness, so a long TTL would show stale "last updated".
+const STATUS_CACHE: &str = "public, max-age=60";
 
 /// Seed the local `status.json` from R2 when the local copy is missing/empty.
 ///
@@ -82,7 +89,7 @@ pub async fn run_sync<F: Fetcher, S: Store>(
 
     // Index page (from the full registry), best-effort.
     let html = render_index_html(all);
-    if let Err(e) = store.put(INDEX_KEY, html.into_bytes(), INDEX_CT).await {
+    if let Err(e) = store.put(INDEX_KEY, html.into_bytes(), INDEX_CT, DATA_CACHE).await {
         warn!("index.html upload failed: {e}");
     }
 
@@ -115,7 +122,7 @@ pub async fn run_sync<F: Fetcher, S: Store>(
             warn!("status persist failed after {key}: {e}");
         }
         let status_body = crate::status::serialize_status(&status).into_bytes();
-        if let Err(e) = store.put(STATUS_KEY, status_body, STATUS_CT).await {
+        if let Err(e) = store.put(STATUS_KEY, status_body, STATUS_CT, STATUS_CACHE).await {
             warn!("status.json upload failed after {key}: {e}");
         }
     }
@@ -135,10 +142,10 @@ async fn persist_bytes<S: Store>(
     bytes: &[u8],
 ) -> anyhow::Result<()> {
     write_mirror(data_dir, key, bytes)?;
-    store.put(key, bytes.to_vec(), p.content_type).await?;
+    store.put(key, bytes.to_vec(), p.content_type, DATA_CACHE).await?;
     if let Some(akey) = alias_key(p) {
         write_mirror(data_dir, &akey, bytes)?;
-        store.put(&akey, bytes.to_vec(), p.content_type).await?;
+        store.put(&akey, bytes.to_vec(), p.content_type, DATA_CACHE).await?;
     }
     Ok(())
 }
@@ -170,7 +177,7 @@ mod tests {
         get_body: Option<Vec<u8>>,   // bytes returned by get(), None => 404
     }
     impl Store for FakeStore {
-        async fn put(&self, key: &str, _bytes: Vec<u8>, _ct: &str) -> anyhow::Result<()> {
+        async fn put(&self, key: &str, _bytes: Vec<u8>, _ct: &str, _cc: &str) -> anyhow::Result<()> {
             self.puts.lock().unwrap().push(key.to_string());
             Ok(())
         }
