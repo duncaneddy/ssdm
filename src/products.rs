@@ -118,7 +118,6 @@ mod tests {
 
     #[test]
     fn products_have_expected_intervals() {
-        use std::time::Duration;
         let items = products();
         let get = |name: &str| items.iter().find(|p| p.name == name).unwrap().interval;
         assert_eq!(get("finals_all"), Duration::from_secs(24 * 3600));
