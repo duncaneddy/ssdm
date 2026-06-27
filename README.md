@@ -1,8 +1,8 @@
 # SSDM — Simple Space Data Mirror
 
-A Cloudflare Worker that mirrors Earth Orientation Parameter (EOP) and
-space-weather data files (plus selected CelesTrak GP groups) into a public R2
-bucket served at https://simplespacedata.org, for use with
+A self-hosted service that mirrors Earth Orientation Parameter (EOP) and
+space-weather data files (plus selected CelesTrak GP groups) into a public
+Cloudflare R2 bucket served at https://simplespacedata.org, for use with
 [Brahe](https://github.com/duncaneddy/brahe).
 
 ## How it works
