@@ -29,7 +29,7 @@ pub fn render_index_html(items: &[Product]) -> String {
 <style>
 :root{{color-scheme:light dark}}
 *{{box-sizing:border-box}}
-body{{font-family:system-ui,-apple-system,sans-serif;max-width:64rem;margin:0 auto;
+body{{font-family:system-ui,-apple-system,sans-serif;max-width:96rem;margin:0 auto;
 padding:2.5rem 1.25rem 4rem;line-height:1.55}}
 header{{text-align:center;margin-bottom:2rem}}
 h1{{margin:.2rem 0;font-size:1.7rem}}
@@ -41,8 +41,10 @@ th,td{{padding:.5rem .6rem;text-align:left;border-bottom:1px solid rgba(127,127,
 vertical-align:top}}
 th{{font-weight:600;white-space:nowrap}}
 tr.discontinued td{{opacity:.55}}
-a{{color:#2563eb;text-decoration:none;word-break:break-all}}
+a{{color:#2563eb;text-decoration:none}}
 a:hover{{text-decoration:underline}}
+.tw{{overflow-x:auto}}
+td.dl a{{white-space:nowrap}}
 .hash{{font-family:ui-monospace,monospace;font-size:.82rem}}
 .copy{{margin-left:.4rem;cursor:pointer;border:1px solid rgba(127,127,127,.4);
 background:transparent;border-radius:4px;padding:.05rem .4rem;font-size:.75rem;color:inherit}}
@@ -60,6 +62,7 @@ plus selected CelesTrak orbital element sets, maintained for use with
 are served at stable URLs of the form
 <code>/&lt;category&gt;/&lt;source&gt;/&lt;name&gt;/latest/&lt;filename&gt;</code>.</p>
 </header>
+<div class="tw">
 <table>
 <thead><tr>
 <th>Product</th><th>Download</th><th>Last updated</th><th>Last checked</th><th>Hash (md5)</th>
@@ -67,6 +70,7 @@ are served at stable URLs of the form
 <tbody>
 {rows}</tbody>
 </table>
+</div>
 <footer>Freshness and hashes load from <code>/status.json</code>.</footer>
 <script>
 function rel(ms){{
@@ -106,7 +110,7 @@ fn push_row(out: &mut String, key: &str, label: &str, url: &str, active: bool) {
     out.push_str(&format!(
         "<tr data-key=\"{key}\"{cls}>\
 <td>{label}</td>\
-<td><a href=\"{url}\">{url}</a></td>\
+<td class=\"dl\"><a href=\"{url}\">{url}</a></td>\
 <td class=\"rel updated\">\u{2014}</td>\
 <td class=\"rel checked\">\u{2014}</td>\
 <td class=\"hash\"><span class=\"hashval\">\u{2014}</span>\

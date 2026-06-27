@@ -47,6 +47,7 @@ pub async fn run_consumer(batch: MessageBatch<IngestMessage>, env: &Env) -> Resu
                 to_ack.push(msg);
             }
             Err(e) => {
+                console_error!("fetch failed for {}: {}", body.key, e);
                 let elapsed = Date::now().as_millis().saturating_sub(body.enqueued_at) / 1000;
                 if should_drop(elapsed) {
                     console_error!("dropping {} after {}s: {}", body.key, elapsed, e);
