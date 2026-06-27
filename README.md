@@ -54,6 +54,42 @@ docker compose logs -f      # watch sync activity
 docker compose run --rm ssdm sync --all   # force a full sync on demand
 ```
 
+## Teardown
+
+### Stop the sync daemon
+
+```bash
+docker compose stop         # pause the daemon (keeps the container + volume)
+docker compose down         # stop and remove the container (keeps the /data volume)
+docker compose down -v      # also delete the local /data volume (file mirror + status.json)
+```
+
+Stopping the daemon only halts syncing — whatever is already in R2 keeps serving
+at https://simplespacedata.org.
+
+### Delete the bucket (full decommission)
+
+⚠️ This permanently removes the public mirror — every data file and `status.json`
+served at https://simplespacedata.org. Only do this to retire the service.
+
+1. **Stop the daemon** (above) so nothing re-uploads mid-teardown.
+2. **Disconnect public access:** R2 → `ssdm-data` → Settings → remove the
+   `simplespacedata.org` custom domain, and delete the `/`→`/index.html` rule
+   under Rules → Transform Rules.
+3. **Empty the bucket** — R2 will not delete a non-empty bucket:
+   - Dashboard: R2 → `ssdm-data` → ⋯ → **Empty bucket**, *or*
+   - AWS CLI against the R2 S3 endpoint (configured with the same R2 key/secret):
+     ```bash
+     aws s3 rm s3://ssdm-data --recursive \
+       --endpoint-url "https://<account-id>.r2.cloudflarestorage.com"
+     ```
+4. **Delete the bucket:**
+   ```bash
+   npx wrangler r2 bucket delete ssdm-data
+   ```
+5. **Revoke the R2 API token** (Cloudflare → R2 → Manage API Tokens) and delete
+   your local `.env`.
+
 ## Adding or changing products
 
 Edit `src/products.rs`:
