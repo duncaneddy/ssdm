@@ -43,6 +43,8 @@ td.dl a{{white-space:nowrap}}
 background:transparent;border-radius:4px;padding:.05rem .4rem;font-size:.75rem;color:inherit}}
 .copy:hover{{background:rgba(127,127,127,.15)}}
 .rel{{white-space:nowrap}}
+.links a{{font-size:.78rem;margin-left:.35rem}}
+.freq{{white-space:nowrap}}
 footer{{text-align:center;margin-top:2rem;color:#888;font-size:.8rem}}
 footer a{{color:inherit;text-decoration:underline}}
 </style>
@@ -90,11 +92,35 @@ document.addEventListener("click",function(ev){{
     )
 }
 
-fn push_row(out: &mut String, key: &str, label: &str, url: &str, active: bool) {
-    let cls = if active { "" } else { " class=\"discontinued\"" };
+/// Minimal escaping for values placed inside a double-quoted HTML attribute.
+fn esc_attr(s: &str) -> String {
+    s.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;")
+}
+
+fn push_row(out: &mut String, p: &Product, key: &str, label: &str, url: &str) {
+    let cls = if p.active { "" } else { " class=\"discontinued\"" };
+    let interval_ms = p.interval.as_millis();
+
+    let mut links = format!(
+        " <a class=\"src\" href=\"{}\" title=\"Upstream source\">source</a>",
+        esc_attr(&p.url)
+    );
+    if let Some(info) = p.info_url {
+        links.push_str(&format!(
+            " <a class=\"info\" href=\"{}\" title=\"Product information\">\u{24D8}</a>",
+            esc_attr(info)
+        ));
+    }
+
+    let freq = p
+        .cadence_label
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| humanize_interval(p.interval));
+
     out.push_str(&format!(
-        "<tr data-key=\"{key}\"{cls}>\
-<td>{label}</td>\
+        "<tr data-key=\"{key}\" data-interval-ms=\"{interval_ms}\"{cls}>\
+<td>{label}<span class=\"links\">{links}</span></td>\
+<td class=\"freq\">{freq}</td>\
 <td class=\"dl\"><a href=\"{url}\">{url}</a></td>\
 <td class=\"rel updated\">\u{2014}</td>\
 <td class=\"rel checked\">\u{2014}</td>\
@@ -149,17 +175,17 @@ fn render_sections(domain: &str, items: &[Product]) -> String {
             out.push_str(&format!("<h2 class=\"prov\">{}</h2>\n", provider_label(prov)));
             out.push_str(
                 "<div class=\"tw\"><table>\n<thead><tr>\
-<th>Product</th><th>Mirror URL</th><th>Last updated</th><th>Last checked</th><th>Hash (md5)</th>\
+<th>Product</th><th>Frequency</th><th>Mirror URL</th><th>Last updated</th><th>Last checked</th><th>Hash (md5)</th>\
 </tr></thead>\n<tbody>\n",
             );
             for p in items.iter().filter(|p| p.category == cat && p.source == prov) {
                 let key = object_key(p);
                 let label = format!("{}/{}/{}", p.category, p.source, p.name);
-                push_row(&mut out, &key, &label, &public_url(domain, &key), p.active);
+                push_row(&mut out, p, &key, &label, &public_url(domain, &key));
                 if let Some(akey) = alias_key(p) {
                     let alias = p.alias_name.unwrap_or("");
                     let alias_label = format!("{}/{}/{} (alias)", p.category, p.source, alias);
-                    push_row(&mut out, &key, &alias_label, &public_url(domain, &akey), p.active);
+                    push_row(&mut out, p, &key, &alias_label, &public_url(domain, &akey));
                 }
             }
             out.push_str("</tbody>\n</table></div>\n");
@@ -276,5 +302,34 @@ mod tests {
     fn renders_provider_subheading() {
         let html = render_index_html("example.org", &sample());
         assert!(html.contains("IERS"), "provider display name shown");
+    }
+
+    #[test]
+    fn shows_frequency_column_and_values() {
+        let html = render_index_html("example.org", &sample());
+        assert!(html.contains("Frequency"), "frequency column header");
+        // sample c04 has interval 3600s => hourly => "1h"
+        assert!(html.contains(">1h<"), "humanized interval rendered");
+    }
+
+    #[test]
+    fn frequency_prefers_cadence_label() {
+        let mut items = sample();
+        items[0].cadence_label = Some("Thursdays ~10:00 UTC");
+        let html = render_index_html("example.org", &items);
+        assert!(html.contains("Thursdays ~10:00 UTC"), "cadence_label overrides interval");
+    }
+
+    #[test]
+    fn product_cell_has_source_and_info_links() {
+        let html = render_index_html("example.org", &sample());
+        assert!(html.contains("href=\"https://example.test/x\""), "upstream source link");
+        assert!(html.contains("href=\"https://iers.example/info\""), "info link when info_url set");
+    }
+
+    #[test]
+    fn rows_carry_interval_ms() {
+        let html = render_index_html("example.org", &sample());
+        assert!(html.contains("data-interval-ms=\"3600000\""), "interval emitted in ms");
     }
 }
