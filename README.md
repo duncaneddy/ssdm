@@ -2,7 +2,7 @@
 
 A self-hosted service that mirrors Earth Orientation Parameter (EOP) and
 space-weather data files (plus selected CelesTrak GP groups) into a public
-Cloudflare R2 bucket served at https://simplespacedata.org, for use with
+Cloudflare R2 bucket served at https://yourgreatdomain.com, for use with
 [Brahe](https://github.com/duncaneddy/brahe).
 
 ## How it works
@@ -65,16 +65,16 @@ docker compose down -v      # also delete the local /data volume (file mirror + 
 ```
 
 Stopping the daemon only halts syncing — whatever is already in R2 keeps serving
-at https://simplespacedata.org.
+at https://yourgreatdomain.com.
 
 ### Delete the bucket (full decommission)
 
 ⚠️ This permanently removes the public mirror — every data file and `status.json`
-served at https://simplespacedata.org. Only do this to retire the service.
+served at https://yourgreatdomain.com. Only do this to retire the service.
 
 1. **Stop the daemon** (above) so nothing re-uploads mid-teardown.
 2. **Disconnect public access:** R2 → `ssdm-data` → Settings → remove the
-   `simplespacedata.org` custom domain, and delete the `/`→`/index.html` rule
+   `yourgreatdomain.com` custom domain, and delete the `/`→`/index.html` rule
    under Rules → Transform Rules.
 3. **Empty the bucket** — R2 will not delete a non-empty bucket:
    - Dashboard: R2 → `ssdm-data` → ⋯ → **Empty bucket**, *or*
