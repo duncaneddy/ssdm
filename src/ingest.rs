@@ -62,7 +62,7 @@ async fn fetch_and_store(bucket: &Bucket, p: &Product) -> Result<()> {
 }
 
 async fn fetch_bytes(url: &str) -> Result<Vec<u8>> {
-    let mut headers = Headers::new();
+    let headers = Headers::new();
     headers.set("User-Agent", USER_AGENT)?;
 
     let mut init = RequestInit::new();

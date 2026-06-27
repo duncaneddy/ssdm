@@ -6,14 +6,15 @@ pub mod products;
 mod ingest;
 
 #[cfg(target_arch = "wasm32")]
-use worker::{console_error, event, Env, ScheduleContext, ScheduledEvent};
+use worker::{console_error, event, Env, Result, ScheduleContext, ScheduledEvent};
 
 /// Cron entrypoint: runs the full ingest once per scheduled trigger.
 #[cfg(target_arch = "wasm32")]
 #[event(scheduled)]
-pub async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) {
+pub async fn scheduled(_event: ScheduledEvent, env: Env, _ctx: ScheduleContext) -> Result<()> {
     if let Err(e) = ingest::ingest_all(&env).await {
         console_error!("ingest_all failed: {}", e);
-        panic!("{}", e);
+        return Err(e);
     }
+    Ok(())
 }
