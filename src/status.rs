@@ -7,10 +7,11 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Default, PartialEq, Debug)]
 pub struct StatusEntry {
-    pub last_checked: u64, // epoch ms — every successful download
-    pub last_updated: u64, // epoch ms — only when the content hash changed
-    pub hash: String,      // md5 hex of the current content
-    pub size: u64,         // bytes
+    pub last_checked: u64,  // epoch ms — every successful download
+    pub last_updated: u64,  // epoch ms — only when the content hash changed
+    pub last_attempt: u64,  // epoch ms — every fetch attempt, success or failure
+    pub hash: String,       // md5 hex of the current content
+    pub size: u64,          // bytes
 }
 
 pub type Status = BTreeMap<String, StatusEntry>;
@@ -49,9 +50,30 @@ pub fn apply_update(
     };
     status.insert(
         key.to_string(),
-        StatusEntry { last_checked: now_ms, last_updated, hash: new_hash.to_string(), size },
+        StatusEntry {
+            last_checked: now_ms,
+            last_updated,
+            last_attempt: now_ms,
+            hash: new_hash.to_string(),
+            size,
+        },
     );
     changed
+}
+
+/// Record a fetch attempt (success or failure) without touching success fields.
+pub fn record_attempt(status: &mut Status, key: &str, now_ms: u64) {
+    let mut e = status.get(key).cloned().unwrap_or_default();
+    e.last_attempt = now_ms;
+    status.insert(key.to_string(), e);
+}
+
+/// True when a product should be fetched: never attempted, or its interval elapsed.
+pub fn is_due(status: &Status, key: &str, interval: std::time::Duration, now_ms: u64) -> bool {
+    match status.get(key) {
+        None => true,
+        Some(e) => now_ms.saturating_sub(e.last_attempt) >= interval.as_millis() as u64,
+    }
 }
 
 #[cfg(test)]
@@ -111,5 +133,43 @@ mod tests {
     fn missing_file_parses_to_empty() {
         assert!(parse_status(b"").is_empty());
         assert!(parse_status(b"not json").is_empty());
+    }
+
+    #[test]
+    fn apply_update_sets_last_attempt() {
+        let mut s = Status::new();
+        apply_update(&mut s, "k", "h", 1, 1000);
+        assert_eq!(s["k"].last_attempt, 1000);
+    }
+
+    #[test]
+    fn record_attempt_bumps_only_last_attempt() {
+        let mut s = Status::new();
+        apply_update(&mut s, "k", "h", 1, 1000);
+        record_attempt(&mut s, "k", 5000);
+        let e = &s["k"];
+        assert_eq!(e.last_attempt, 5000);
+        assert_eq!(e.last_checked, 1000, "success fields untouched on a bare attempt");
+        assert_eq!(e.hash, "h");
+    }
+
+    #[test]
+    fn record_attempt_creates_minimal_entry_when_absent() {
+        let mut s = Status::new();
+        record_attempt(&mut s, "new", 5000);
+        let e = &s["new"];
+        assert_eq!(e.last_attempt, 5000);
+        assert_eq!(e.last_checked, 0);
+        assert!(e.hash.is_empty());
+    }
+
+    #[test]
+    fn is_due_when_absent_or_interval_elapsed() {
+        use std::time::Duration;
+        let mut s = Status::new();
+        assert!(is_due(&s, "k", Duration::from_secs(60), 1000), "absent => due");
+        apply_update(&mut s, "k", "h", 1, 1000);
+        assert!(!is_due(&s, "k", Duration::from_secs(60), 1000 + 59_000));
+        assert!(is_due(&s, "k", Duration::from_secs(60), 1000 + 60_000));
     }
 }
