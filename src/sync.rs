@@ -16,10 +16,12 @@ use crate::status::{apply_update, content_hash, record_attempt};
 const INDEX_KEY: &str = "index.html";
 const INDEX_CT: &str = "text/html; charset=utf-8";
 
+#[allow(async_fn_in_trait)]
 pub trait Fetcher {
     async fn fetch(&self, url: &str) -> anyhow::Result<Vec<u8>>;
 }
 
+#[allow(async_fn_in_trait)]
 pub trait Store {
     async fn put(&self, key: &str, bytes: Vec<u8>, content_type: &str) -> anyhow::Result<()>;
 }
@@ -175,8 +177,24 @@ mod tests {
         let mut rate = RateLimiter::new(Duration::ZERO, Duration::ZERO);
 
         run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), 1000).await;
+        let data_key = |puts: &[String]| {
+            puts.iter()
+                .filter(|k| k.contains("active/latest/active.json"))
+                .count()
+        };
+        assert_eq!(
+            data_key(&store.puts.lock().unwrap()),
+            1,
+            "first run uploads the product once"
+        );
+
         let sum = run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), 2000).await;
         assert_eq!((sum.checked, sum.changed, sum.failed), (1, 0, 0));
+        assert_eq!(
+            data_key(&store.puts.lock().unwrap()),
+            1,
+            "unchanged content must not re-upload the product data"
+        );
     }
 
     #[tokio::test]
@@ -185,6 +203,15 @@ mod tests {
         let good = product("active", "https://h/active");
         let bad = product("bad", "https://h/bad");
         let all = vec![product("active", "https://h/active"), product("bad", "https://h/bad")];
+        let bad_key = crate::keys::object_key(&bad);
+        let good_key = crate::keys::object_key(&good);
+
+        // Seed a prior successful status for the failing key so we can prove it
+        // is preserved across a later failed fetch.
+        let mut seed = crate::status::Status::new();
+        crate::status::apply_update(&mut seed, &bad_key, "seedhash", 7, 500);
+        crate::local::save_status(dir.path(), &seed).unwrap();
+
         let mut out = HashMap::new();
         out.insert("https://h/active".to_string(), Some(b"data".to_vec()));
         out.insert("https://h/bad".to_string(), None);
@@ -192,10 +219,26 @@ mod tests {
         let store = FakeStore::default();
         let mut rate = RateLimiter::new(Duration::ZERO, Duration::ZERO);
 
-        let sum = run_sync(&all, &[&good, &bad], &fetcher, &store, &mut rate, dir.path(), 1000).await;
+        // Failing product FIRST, succeeding product second: proves the loop
+        // continues past the failure.
+        let sum = run_sync(&all, &[&bad, &good], &fetcher, &store, &mut rate, dir.path(), 1000).await;
         assert_eq!((sum.checked, sum.changed, sum.failed), (1, 1, 1));
-        // good product still persisted despite bad's failure
+
+        // good was still processed despite bad failing first.
+        let puts = store.puts.lock().unwrap();
+        assert!(
+            puts.iter().any(|k| k == &good_key),
+            "succeeding product after the failure must still be uploaded"
+        );
+
+        // bad's prior success fields are untouched; only last_attempt advanced.
         let st = crate::local::load_status(dir.path());
+        let bad_entry = &st[&bad_key];
+        assert_eq!(bad_entry.last_checked, 500, "prior last_checked preserved");
+        assert_eq!(bad_entry.hash, "seedhash", "prior hash preserved");
+        assert_eq!(bad_entry.size, 7, "prior size preserved");
+        assert_eq!(bad_entry.last_attempt, 1000, "failed attempt advances last_attempt");
+        // good product persisted.
         assert!(st.keys().any(|k| k.contains("active/latest")));
     }
 }
