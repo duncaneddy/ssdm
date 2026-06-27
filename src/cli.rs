@@ -100,6 +100,7 @@ mod tests {
             category: "catalog", source: "celestrak", name,
             url: format!("https://h/{name}"), filename: format!("{name}.json"),
             content_type: "application/json", active, alias_name: None,
+            info_url: None, cadence_label: None,
             interval: Duration::from_secs(3600),
         }
     }

@@ -13,6 +13,8 @@ pub struct Product {
     pub content_type: &'static str,
     pub active: bool,              // false → not fetched; existing object stays frozen
     pub alias_name: Option<&'static str>, // also written under this stable path segment
+    pub info_url: Option<&'static str>,   // human-readable docs page (display only)
+    pub cadence_label: Option<&'static str>, // named publish schedule (display only)
     pub interval: Duration,
 }
 
@@ -30,6 +32,8 @@ pub fn products() -> Vec<Product> {
             url: "https://datacenter.iers.org/data/latestVersion/finals.all.iau2000.txt".into(),
             filename: "finals.all.iau2000.txt".into(),
             content_type: "text/plain", active: true, alias_name: None,
+            info_url: Some("https://www.iers.org/IERS/EN/DataProducts/EarthOrientationData/eop.html"),
+            cadence_label: None,
             interval: Duration::from_secs(24 * 3600),
         },
         Product {
@@ -37,6 +41,8 @@ pub fn products() -> Vec<Product> {
             url: "https://datacenter.iers.org/data/latestVersion/EOP_20u24_C04_one_file_1962-now.txt".into(),
             filename: "EOP_C04_one_file_1962-now.txt".into(),
             content_type: "text/plain", active: true, alias_name: Some("c04"),
+            info_url: Some("https://www.iers.org/IERS/EN/DataProducts/EarthOrientationData/eop.html"),
+            cadence_label: None,
             interval: Duration::from_secs(7 * 24 * 3600),
         },
         Product {
@@ -44,6 +50,8 @@ pub fn products() -> Vec<Product> {
             url: "https://celestrak.org/SpaceData/sw19571001.txt".into(),
             filename: "sw19571001.txt".into(),
             content_type: "text/plain", active: true, alias_name: None,
+            info_url: Some("https://celestrak.org/SpaceData/"),
+            cadence_label: None,
             interval: Duration::from_secs(6 * 3600),
         },
     ];
@@ -54,6 +62,8 @@ pub fn products() -> Vec<Product> {
             url: format!("https://celestrak.org/NORAD/elements/gp.php?GROUP={slug}&FORMAT=json"),
             filename: format!("{slug}.json"),
             content_type: "application/json", active: true, alias_name: None,
+            info_url: Some("https://celestrak.org/NORAD/documentation/gp-data-formats.php"),
+            cadence_label: None,
             interval: Duration::from_secs(2 * 3600),
         });
     }
@@ -131,12 +141,25 @@ mod tests {
         let dupes = vec![
             Product { category: "eop", source: "iers", name: "c04_a", url: "u".into(),
                 filename: "f".into(), content_type: "text/plain", active: true, alias_name: Some("c04"),
+                info_url: None, cadence_label: None,
                 interval: Duration::from_secs(3600) },
             Product { category: "eop", source: "iers", name: "c04_b", url: "u".into(),
                 filename: "f".into(), content_type: "text/plain", active: true, alias_name: Some("c04"),
+                info_url: None, cadence_label: None,
                 interval: Duration::from_secs(3600) },
         ];
         assert!(validate_registry(&dupes).is_err());
+    }
+
+    #[test]
+    fn known_products_carry_info_urls() {
+        let items = products();
+        let finals = items.iter().find(|p| p.name == "finals_all").unwrap();
+        assert_eq!(finals.info_url, Some("https://www.iers.org/IERS/EN/DataProducts/EarthOrientationData/eop.html"));
+        let starlink = items.iter().find(|p| p.name == "starlink").unwrap();
+        assert_eq!(starlink.info_url, Some("https://celestrak.org/NORAD/documentation/gp-data-formats.php"));
+        // cadence_label defaults to None (interval fallback covers current products)
+        assert_eq!(finals.cadence_label, None);
     }
 
 }

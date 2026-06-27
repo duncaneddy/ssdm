@@ -119,6 +119,22 @@ fn push_row(out: &mut String, key: &str, label: &str, url: &str, active: bool) {
     ));
 }
 
+/// Short human label for a polling interval, e.g. `daily`, `weekly`, `6h`, `90m`.
+fn humanize_interval(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs % 86_400 == 0 {
+        match secs / 86_400 {
+            1 => "daily".to_string(),
+            7 => "weekly".to_string(),
+            n => format!("{n}d"),
+        }
+    } else if secs % 3_600 == 0 {
+        format!("{}h", secs / 3_600)
+    } else {
+        format!("{}m", secs / 60)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -132,6 +148,7 @@ mod tests {
                 url: "https://example.test/x".into(),
                 filename: "EOP_C04_one_file_1962-now.txt".into(),
                 content_type: "text/plain", active: true, alias_name: Some("c04"),
+                info_url: Some("https://iers.example/info"), cadence_label: None,
                 interval: Duration::from_secs(3600),
             },
             Product {
@@ -139,6 +156,7 @@ mod tests {
                 url: "https://example.test/old".into(),
                 filename: "EOP_C04_one_file_1962-now.txt".into(),
                 content_type: "text/plain", active: false, alias_name: None,
+                info_url: None, cadence_label: None,
                 interval: Duration::from_secs(3600),
             },
         ]
@@ -182,5 +200,16 @@ mod tests {
         let html = render_index_html("example.org", &sample());
         assert!(html.contains("class=\"copy\""));
         assert!(html.contains("/status.json"));
+    }
+
+    #[test]
+    fn humanizes_common_intervals() {
+        use std::time::Duration;
+        assert_eq!(humanize_interval(Duration::from_secs(24 * 3600)), "daily");
+        assert_eq!(humanize_interval(Duration::from_secs(7 * 24 * 3600)), "weekly");
+        assert_eq!(humanize_interval(Duration::from_secs(6 * 3600)), "6h");
+        assert_eq!(humanize_interval(Duration::from_secs(2 * 3600)), "2h");
+        assert_eq!(humanize_interval(Duration::from_secs(3 * 24 * 3600)), "3d");
+        assert_eq!(humanize_interval(Duration::from_secs(90 * 60)), "90m");
     }
 }
