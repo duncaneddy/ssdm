@@ -7,48 +7,50 @@ bucket served at https://simplespacedata.org, for use with
 
 ## How it works
 
-A cron-only Worker fetches each product in `src/products.rs` once daily and
-writes the latest bytes to R2 under `/<category>/<source>/<name>/latest/<filename>`.
-A public R2 custom domain serves the bucket directly via Cloudflare's CDN; the
-Worker is never in the read path.
+A long-running Docker daemon (`src/`) fetches each product in `src/products.rs`
+on its own interval, compares the download against a locally persisted
+`status.json` (the change-detection source of truth), and uploads changed bytes
+to a public R2 bucket under `/<category>/<source>/<name>/latest/<filename>`. A
+public R2 custom domain serves the bucket directly via Cloudflare's CDN; the
+daemon is only ever in the write path.
 
-## Available data
-
-See https://simplespacedata.org for the live, auto-generated product list. Example URLs:
-
-- `https://simplespacedata.org/eop/iers/finals_all/latest/finals.all.iau2000.txt`
-- `https://simplespacedata.org/eop/iers/c04/latest/EOP_C04_one_file_1962-now.txt` (stable alias)
-- `https://simplespacedata.org/space_weather/celestrak/sw_all/latest/sw19571001.txt`
-- `https://simplespacedata.org/catalog/celestrak/active/latest/active.json`
+Each product has its own cadence (e.g. CelesTrak groups every 2h, daily EOP/space
+weather, slower realizations weekly). The daemon sleeps until the soonest product
+is due, syncs the due set sequentially, and persists `status.json` after each
+product (locally and to R2). Per-host rate limiting and a small stagger keep us
+polite to upstreams; failed downloads retry briefly in-run and otherwise wait for
+the product's next interval.
 
 ## Local development
 
 ```bash
-cargo test                                   # host unit tests (registry, keys, page)
-cargo check --target wasm32-unknown-unknown  # type-check worker I/O
-npx wrangler dev --test-scheduled            # run locally
-curl http://localhost:8787/__scheduled       # trigger the cron handler
+cargo test                 # all unit tests
+cargo run -- sync --all    # one-shot full sync (needs R2 env vars set)
+cargo run -- sync --product starlink   # force a single product
+cargo run -- daemon        # run the scheduler loop
 ```
 
-## One-time Cloudflare setup
+Configuration is via environment variables (see `.env.example`). Copy it to
+`.env` and fill in the R2 credentials.
+
+## R2 setup (one-time)
 
 1. **Create the bucket:** `npx wrangler r2 bucket create ssdm-data`
 2. **Public custom domain:** R2 → `ssdm-data` → Settings → Public access →
    Connect a custom domain → `simplespacedata.org`.
 3. **Serve the landing page at `/`:** Rules → Transform Rules → Rewrite URL →
-   if URI path equals `/`, rewrite path to `/index.html`. (R2 public buckets do
-   not auto-resolve `/` to `index.html`.)
-4. **Deploy secrets (GitHub repo → Settings → Secrets):**
-   `CLOUDFLARE_API_TOKEN` (Workers Scripts: Edit + R2: Edit) and
-   `CLOUDFLARE_ACCOUNT_ID`.
-5. **Monitoring (native, no code):** Cloudflare → Notifications → enable Worker
-   error and usage/billing alerts. The Worker fails loudly (a thrown summary on
-   any product failure) so these fire; use `npx wrangler tail` to see which
-   product/URL/status failed.
+   if URI path equals `/`, rewrite path to `/index.html`.
+4. **Create an R2 API token** (Object Read & Write) and put its values in `.env`
+   as `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`, with `R2_ACCOUNT_ID`.
 
 ## Deploy
 
-Push to `main` (CI deploys), or run `npx wrangler deploy` manually.
+```bash
+cp .env.example .env        # fill in R2 credentials
+docker compose up -d        # build + run the daemon
+docker compose logs -f      # watch sync activity
+docker compose run --rm ssdm sync --all   # force a full sync on demand
+```
 
 ## Adding or changing products
 
