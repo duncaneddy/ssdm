@@ -8,7 +8,7 @@ enabled = true
 invocation_logs = true
 
 [observability.traces]
-enabled = false
+enabled = true
 
 [build]
 command = "cargo install -q worker-build && worker-build --release"
