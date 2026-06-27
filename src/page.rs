@@ -6,18 +6,7 @@ use crate::products::Product;
 /// Render the full `index.html`: a centered, self-contained page listing every
 /// product. Freshness/hash cells are filled client-side from `/status.json`.
 pub fn render_index_html(domain: &str, items: &[Product]) -> String {
-    let mut rows = String::new();
-    for p in items {
-        let key = object_key(p);
-        let label = format!("{}/{}/{}", p.category, p.source, p.name);
-        push_row(&mut rows, &key, &label, &public_url(domain, &key), p.active);
-        if let Some(akey) = alias_key(p) {
-            let alias = p.alias_name.unwrap_or("");
-            let alias_label = format!("{}/{}/{} (alias)", p.category, p.source, alias);
-            // alias shares the primary key's status (same bytes)
-            push_row(&mut rows, &key, &alias_label, &public_url(domain, &akey), p.active);
-        }
-    }
+    let sections = render_sections(domain, items);
 
     format!(
         r#"<!DOCTYPE html>
@@ -36,6 +25,10 @@ h1{{margin:.2rem 0;font-size:1.7rem}}
 header p{{max-width:42rem;margin:.6rem auto;color:#555}}
 @media(prefers-color-scheme:dark){{header p{{color:#aaa}}}}
 code{{background:rgba(127,127,127,.18);padding:.1rem .35rem;border-radius:4px;font-size:.9em}}
+details{{margin:1rem 0;border:1px solid rgba(127,127,127,.25);border-radius:8px;padding:.5rem 1rem}}
+summary{{font-size:1.15rem;font-weight:600;cursor:pointer;padding:.3rem 0}}
+h2.prov{{font-size:.95rem;font-weight:600;color:#666;margin:1rem 0 .3rem}}
+@media(prefers-color-scheme:dark){{h2.prov{{color:#aaa}}}}
 table{{border-collapse:collapse;width:100%;font-size:.88rem}}
 th,td{{padding:.5rem .6rem;text-align:left;border-bottom:1px solid rgba(127,127,127,.25);
 vertical-align:top}}
@@ -51,6 +44,7 @@ background:transparent;border-radius:4px;padding:.05rem .4rem;font-size:.75rem;c
 .copy:hover{{background:rgba(127,127,127,.15)}}
 .rel{{white-space:nowrap}}
 footer{{text-align:center;margin-top:2rem;color:#888;font-size:.8rem}}
+footer a{{color:inherit;text-decoration:underline}}
 </style>
 </head>
 <body>
@@ -62,16 +56,7 @@ plus selected CelesTrak orbital element sets, maintained for use with
 (from every few hours to weekly) and are served at stable URLs of the form
 <code>/&lt;category&gt;/&lt;source&gt;/&lt;name&gt;/latest/&lt;filename&gt;</code>.</p>
 </header>
-<div class="tw">
-<table>
-<thead><tr>
-<th>Product</th><th>Download</th><th>Last updated</th><th>Last checked</th><th>Hash (md5)</th>
-</tr></thead>
-<tbody>
-{rows}</tbody>
-</table>
-</div>
-<footer>Freshness and hashes load from <code>/status.json</code>.</footer>
+{sections}<footer>Freshness and hashes load from <code>/status.json</code>.</footer>
 <script>
 function rel(ms){{
   if(!ms) return "—";
@@ -117,6 +102,72 @@ fn push_row(out: &mut String, key: &str, label: &str, url: &str, active: bool) {
 <button class=\"copy\" hidden>copy</button></td>\
 </tr>\n"
     ));
+}
+
+fn category_label(cat: &str) -> &str {
+    match cat {
+        "eop" => "Earth Orientation Parameters",
+        "space_weather" => "Space Weather",
+        "catalog" => "Ephemeris",
+        other => other,
+    }
+}
+
+fn provider_label(src: &str) -> &str {
+    match src {
+        "iers" => "IERS",
+        "celestrak" => "CelesTrak",
+        other => other,
+    }
+}
+
+/// Group products by category (→ collapsible section) then provider (→ table),
+/// preserving first-seen order.
+fn render_sections(domain: &str, items: &[Product]) -> String {
+    let mut cats: Vec<&str> = Vec::new();
+    for p in items {
+        if !cats.contains(&p.category) {
+            cats.push(p.category);
+        }
+    }
+
+    let mut out = String::new();
+    for cat in cats {
+        out.push_str(&format!(
+            "<details open><summary>{}</summary>\n",
+            category_label(cat)
+        ));
+
+        let mut provs: Vec<&str> = Vec::new();
+        for p in items.iter().filter(|p| p.category == cat) {
+            if !provs.contains(&p.source) {
+                provs.push(p.source);
+            }
+        }
+
+        for prov in provs {
+            out.push_str(&format!("<h2 class=\"prov\">{}</h2>\n", provider_label(prov)));
+            out.push_str(
+                "<div class=\"tw\"><table>\n<thead><tr>\
+<th>Product</th><th>Mirror URL</th><th>Last updated</th><th>Last checked</th><th>Hash (md5)</th>\
+</tr></thead>\n<tbody>\n",
+            );
+            for p in items.iter().filter(|p| p.category == cat && p.source == prov) {
+                let key = object_key(p);
+                let label = format!("{}/{}/{}", p.category, p.source, p.name);
+                push_row(&mut out, &key, &label, &public_url(domain, &key), p.active);
+                if let Some(akey) = alias_key(p) {
+                    let alias = p.alias_name.unwrap_or("");
+                    let alias_label = format!("{}/{}/{} (alias)", p.category, p.source, alias);
+                    push_row(&mut out, &key, &alias_label, &public_url(domain, &akey), p.active);
+                }
+            }
+            out.push_str("</tbody>\n</table></div>\n");
+        }
+
+        out.push_str("</details>\n");
+    }
+    out
 }
 
 /// Short human label for a polling interval, e.g. `daily`, `weekly`, `6h`, `90m`.
@@ -211,5 +262,19 @@ mod tests {
         assert_eq!(humanize_interval(Duration::from_secs(2 * 3600)), "2h");
         assert_eq!(humanize_interval(Duration::from_secs(3 * 24 * 3600)), "3d");
         assert_eq!(humanize_interval(Duration::from_secs(90 * 60)), "90m");
+    }
+
+    #[test]
+    fn renders_collapsible_section_with_display_name() {
+        let html = render_index_html("example.org", &sample());
+        assert!(html.contains("<details"), "sections are collapsible");
+        assert!(html.contains("<summary"), "sections have a summary header");
+        assert!(html.contains("Earth Orientation Parameters"), "category display name");
+    }
+
+    #[test]
+    fn renders_provider_subheading() {
+        let html = render_index_html("example.org", &sample());
+        assert!(html.contains("IERS"), "provider display name shown");
     }
 }
