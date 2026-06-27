@@ -3,6 +3,7 @@ pub mod message;
 pub mod page;
 pub mod products;
 pub mod retry;
+pub mod status;
 
 #[cfg(target_arch = "wasm32")]
 mod ingest;
