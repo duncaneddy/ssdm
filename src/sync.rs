@@ -79,6 +79,10 @@ pub async fn run_sync<F: Fetcher, S: Store>(
         if let Err(e) = save_status(data_dir, &status) {
             warn!("status persist failed after {key}: {e}");
         }
+        let status_body = crate::status::serialize_status(&status).into_bytes();
+        if let Err(e) = store.put("status.json", status_body, "application/json").await {
+            warn!("status.json upload failed after {key}: {e}");
+        }
     }
 
     info!(
@@ -161,6 +165,7 @@ mod tests {
         let puts = store.puts.lock().unwrap();
         assert!(puts.contains(&"index.html".to_string()));
         assert!(puts.iter().any(|k| k.contains("active/latest/active.json")));
+        assert!(puts.contains(&"status.json".to_string()), "status.json must be uploaded to R2 after each product");
         let st = crate::local::load_status(dir.path());
         assert!(!st.is_empty());
     }
@@ -194,6 +199,11 @@ mod tests {
             data_key(&store.puts.lock().unwrap()),
             1,
             "unchanged content must not re-upload the product data"
+        );
+        // status.json must still be uploaded even when content is unchanged
+        assert!(
+            store.puts.lock().unwrap().iter().filter(|k| k.as_str() == "status.json").count() >= 2,
+            "status.json must be uploaded to R2 after each run"
         );
     }
 

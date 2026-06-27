@@ -16,3 +16,5 @@ jobs:
         run: cargo test
       - name: Build release
         run: cargo build --release --bin ssdm
+      - name: Docker build
+        run: docker build -t ssdm:latest .

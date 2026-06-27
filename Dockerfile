@@ -3,7 +3,7 @@ FROM rust:1-bookworm AS builder
 WORKDIR /app
 COPY Cargo.toml Cargo.lock* ./
 COPY src ./src
-RUN cargo build --release --bin ssdm
+RUN cargo build --locked --release --bin ssdm
 
 # Runtime stage
 FROM debian:bookworm-slim

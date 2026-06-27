@@ -50,6 +50,10 @@ fn select_products<'a>(items: &'a [Product], names: &[String]) -> anyhow::Result
 pub async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let cfg = from_env()?;
+    // Acquire an exclusive advisory lock that persists for the process lifetime.
+    // This prevents a manual `sync` from racing with a running daemon on the
+    // same /data volume.
+    let _lock = crate::local::acquire_lock(&cfg.data_dir)?;
     match cli.command.unwrap_or(Command::Daemon) {
         Command::Daemon => crate::scheduler::run_daemon(&cfg).await,
         Command::Sync { all, product } => {

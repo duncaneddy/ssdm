@@ -58,8 +58,8 @@ footer{{text-align:center;margin-top:2rem;color:#888;font-size:.8rem}}
 <h1>Simple Space Data Mirror</h1>
 <p>A public mirror of Earth Orientation Parameter (EOP) and space-weather data files,
 plus selected CelesTrak orbital element sets, maintained for use with
-<a href="https://github.com/duncaneddy/brahe">Brahe</a>. Files refresh once daily (UTC) and
-are served at stable URLs of the form
+<a href="https://github.com/duncaneddy/brahe">Brahe</a>. Each file refreshes on its own schedule
+(from every few hours to weekly) and are served at stable URLs of the form
 <code>/&lt;category&gt;/&lt;source&gt;/&lt;name&gt;/latest/&lt;filename&gt;</code>.</p>
 </header>
 <div class="tw">
