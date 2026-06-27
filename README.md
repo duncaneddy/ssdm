@@ -39,7 +39,7 @@ For a local `cargo run`, also set `DATA_DIR` to a writable local path (e.g.
 
 1. **Create the bucket:** `npx wrangler r2 bucket create ssdm-data`
 2. **Public custom domain:** R2 → `ssdm-data` → Settings → Public access →
-   Connect a custom domain → `simplespacedata.org`.
+   Connect a custom domain → `yourgreatdomain.com`.
 3. **Serve the landing page at `/`:** Rules → Transform Rules → Rewrite URL →
    if URI path equals `/`, rewrite path to `/index.html`.
 4. **Create an R2 API token** (Object Read & Write) and put its values in `.env`
