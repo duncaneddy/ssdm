@@ -65,7 +65,9 @@ plus selected CelesTrak orbital element sets, maintained for use with
 (from every few hours to weekly) and are served at stable URLs of the form
 <code>/&lt;category&gt;/&lt;source&gt;/&lt;name&gt;/latest/&lt;filename&gt;</code>.</p>
 </header>
-{sections}<footer>Freshness and hashes load from <code>/status.json</code>.</footer>
+{sections}<footer>Freshness and hashes load from <code>/status.json</code>.<br>
+Source on <a href="https://github.com/duncaneddy/ssdm">GitHub</a> — found a bug or have a suggestion?
+<a href="https://github.com/duncaneddy/ssdm/issues/new">Open an issue</a>.</footer>
 <script>
 function rel(ms){{
   if(!ms) return "—";
@@ -357,5 +359,12 @@ mod tests {
         let html = render_index_html("example.org", &sample());
         assert!(html.contains("1.25"), "green/orange threshold");
         assert!(html.contains("2.25"), "orange/red threshold");
+    }
+
+    #[test]
+    fn footer_links_to_repo_and_issues() {
+        let html = render_index_html("example.org", &sample());
+        assert!(html.contains("https://github.com/duncaneddy/ssdm"), "repo link");
+        assert!(html.contains("https://github.com/duncaneddy/ssdm/issues/new"), "open-an-issue link");
     }
 }
