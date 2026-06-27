@@ -10,5 +10,15 @@ command = "cargo install -q worker-build && worker-build --release"
 binding = "BUCKET"
 bucket_name = "ssdm-data"
 
+[[queues.producers]]
+binding = "QUEUE"
+queue   = "ssdm-ingest"
+
+[[queues.consumers]]
+queue             = "ssdm-ingest"
+max_batch_size    = 5
+max_batch_timeout = 30
+max_retries       = 20
+
 [triggers]
 crons = ["0 6 * * *"]
