@@ -45,6 +45,13 @@ background:transparent;border-radius:4px;padding:.05rem .4rem;font-size:.75rem;c
 .rel{{white-space:nowrap}}
 .links a{{font-size:.78rem;margin-left:.35rem}}
 .freq{{white-space:nowrap}}
+td.dotcell{{width:1rem;padding-right:0}}
+.dot{{display:inline-block;width:.6rem;height:.6rem;border-radius:50%;background:#bbb;vertical-align:middle}}
+tr.ok .dot{{background:#22c55e}} tr.ok .checked{{color:#16a34a}}
+tr.warn .dot{{background:#f59e0b}} tr.warn .checked{{color:#d97706}}
+tr.bad .dot{{background:#ef4444}} tr.bad .checked{{color:#dc2626}}
+@media(prefers-color-scheme:dark){{
+tr.ok .checked{{color:#4ade80}} tr.warn .checked{{color:#fbbf24}} tr.bad .checked{{color:#f87171}}}}
 footer{{text-align:center;margin-top:2rem;color:#888;font-size:.8rem}}
 footer a{{color:inherit;text-decoration:underline}}
 </style>
@@ -76,6 +83,11 @@ fetch("/status.json").then(function(r){{return r.ok?r.json():{{}};}}).then(funct
         hs=tr.querySelector(".hashval"), bt=tr.querySelector(".copy");
     up.textContent=rel(e.last_updated); up.title=abs(e.last_updated);
     ck.textContent=rel(e.last_checked); ck.title=abs(e.last_checked);
+    var iv=parseFloat(tr.getAttribute("data-interval-ms"))||0;
+    if(e.last_checked && iv){{
+      var ratio=(Date.now()-e.last_checked)/iv;
+      tr.classList.add(ratio<1.25?"ok":(ratio<2.25?"warn":"bad"));
+    }}
     if(e.hash){{ hs.textContent=e.hash.slice(0,12)+"…"; bt.dataset.hash=e.hash; bt.hidden=false; }}
   }});
 }}).catch(function(){{}});
@@ -119,6 +131,7 @@ fn push_row(out: &mut String, p: &Product, key: &str, label: &str, url: &str) {
 
     out.push_str(&format!(
         "<tr data-key=\"{key}\" data-interval-ms=\"{interval_ms}\"{cls}>\
+<td class=\"dotcell\"><span class=\"dot\"></span></td>\
 <td>{label}<span class=\"links\">{links}</span></td>\
 <td class=\"freq\">{freq}</td>\
 <td class=\"dl\"><a href=\"{url}\">{url}</a></td>\
@@ -175,7 +188,7 @@ fn render_sections(domain: &str, items: &[Product]) -> String {
             out.push_str(&format!("<h2 class=\"prov\">{}</h2>\n", provider_label(prov)));
             out.push_str(
                 "<div class=\"tw\"><table>\n<thead><tr>\
-<th>Product</th><th>Frequency</th><th>Mirror URL</th><th>Last updated</th><th>Last checked</th><th>Hash (md5)</th>\
+<th class=\"dh\"></th><th>Product</th><th>Frequency</th><th>Mirror URL</th><th>Last updated</th><th>Last checked</th><th>Hash (md5)</th>\
 </tr></thead>\n<tbody>\n",
             );
             for p in items.iter().filter(|p| p.category == cat && p.source == prov) {
@@ -331,5 +344,18 @@ mod tests {
     fn rows_carry_interval_ms() {
         let html = render_index_html("example.org", &sample());
         assert!(html.contains("data-interval-ms=\"3600000\""), "interval emitted in ms");
+    }
+
+    #[test]
+    fn rows_have_status_dot_cell() {
+        let html = render_index_html("example.org", &sample());
+        assert!(html.contains("class=\"dot\""), "status dot present on rows");
+    }
+
+    #[test]
+    fn js_color_thresholds_present() {
+        let html = render_index_html("example.org", &sample());
+        assert!(html.contains("1.25"), "green/orange threshold");
+        assert!(html.contains("2.25"), "orange/red threshold");
     }
 }
