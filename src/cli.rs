@@ -42,7 +42,19 @@ pub async fn run() -> anyhow::Result<()> {
             let now = crate::scheduler::now_ms();
 
             let process: Vec<&Product> = if !product.is_empty() {
-                items.iter().filter(|p| product.iter().any(|n| n == p.name)).collect()
+                let matched: Vec<&Product> = items
+                    .iter()
+                    .filter(|p| p.active && product.iter().any(|n| n == p.name))
+                    .collect();
+                let unknown: Vec<&str> = product
+                    .iter()
+                    .filter(|n| !items.iter().any(|p| p.active && &p.name == n))
+                    .map(|s| s.as_str())
+                    .collect();
+                if !unknown.is_empty() {
+                    anyhow::bail!("unknown product name(s): {}", unknown.join(", "));
+                }
+                matched
             } else if all {
                 items.iter().filter(|p| p.active).collect()
             } else {
@@ -54,7 +66,10 @@ pub async fn run() -> anyhow::Result<()> {
             };
 
             info!("manual sync over {} product(s)", process.len());
-            crate::sync::run_sync(&items, &process, &fetcher, &store, &mut rate, &cfg.data_dir, now).await;
+            let summary = crate::sync::run_sync(&items, &process, &fetcher, &store, &mut rate, &cfg.data_dir, now).await;
+            if summary.failed > 0 {
+                anyhow::bail!("{} fetch(es) failed (checked={}, changed={})", summary.failed, summary.checked, summary.changed);
+            }
             Ok(())
         }
     }
