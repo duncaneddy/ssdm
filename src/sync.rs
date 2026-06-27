@@ -82,13 +82,14 @@ pub async fn run_sync<F: Fetcher, S: Store>(
     store: &S,
     rate: &mut RateLimiter,
     data_dir: &Path,
+    site_domain: &str,
     now_ms: u64,
 ) -> SyncSummary {
     let mut summary = SyncSummary::default();
     let mut status = load_status(data_dir);
 
     // Index page (from the full registry), best-effort.
-    let html = render_index_html(all);
+    let html = render_index_html(site_domain, all);
     if let Err(e) = store.put(INDEX_KEY, html.into_bytes(), INDEX_CT, DATA_CACHE).await {
         warn!("index.html upload failed: {e}");
     }
@@ -206,7 +207,7 @@ mod tests {
         let store = FakeStore::default();
         let mut rate = RateLimiter::new(Duration::ZERO, Duration::ZERO);
 
-        let sum = run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), 1000).await;
+        let sum = run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), "example.org", 1000).await;
         assert_eq!((sum.checked, sum.changed, sum.failed), (1, 1, 0));
         let puts = store.puts.lock().unwrap();
         assert!(puts.contains(&"index.html".to_string()));
@@ -227,7 +228,7 @@ mod tests {
         let store = FakeStore::default();
         let mut rate = RateLimiter::new(Duration::ZERO, Duration::ZERO);
 
-        run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), 1000).await;
+        run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), "example.org", 1000).await;
         let data_key = |puts: &[String]| {
             puts.iter()
                 .filter(|k| k.contains("active/latest/active.json"))
@@ -239,7 +240,7 @@ mod tests {
             "first run uploads the product once"
         );
 
-        let sum = run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), 2000).await;
+        let sum = run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), "example.org", 2000).await;
         assert_eq!((sum.checked, sum.changed, sum.failed), (1, 0, 0));
         assert_eq!(
             data_key(&store.puts.lock().unwrap()),
@@ -277,7 +278,7 @@ mod tests {
 
         // Failing product FIRST, succeeding product second: proves the loop
         // continues past the failure.
-        let sum = run_sync(&all, &[&bad, &good], &fetcher, &store, &mut rate, dir.path(), 1000).await;
+        let sum = run_sync(&all, &[&bad, &good], &fetcher, &store, &mut rate, dir.path(), "example.org", 1000).await;
         assert_eq!((sum.checked, sum.changed, sum.failed), (1, 1, 1));
 
         // good was still processed despite bad failing first.

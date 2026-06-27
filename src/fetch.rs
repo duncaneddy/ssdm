@@ -9,7 +9,6 @@ use log::warn;
 use crate::retry::{backoff_delay, MAX_ATTEMPTS};
 use crate::sync::Fetcher;
 
-const USER_AGENT: &str = "ssdm-mirror/1.0 (+https://simplespacedata.org)";
 
 /// Outcome of a single fetch attempt.
 ///
@@ -54,9 +53,11 @@ pub struct HttpFetcher {
 }
 
 impl HttpFetcher {
-    pub fn new(timeout: Duration) -> Result<Self> {
+    pub fn new(timeout: Duration, site_domain: &str) -> Result<Self> {
+        // Identify ourselves to upstreams with a contact URL (the public site).
+        let user_agent = format!("ssdm-mirror/1.0 (+https://{site_domain})");
         let client = reqwest::Client::builder()
-            .user_agent(USER_AGENT)
+            .user_agent(user_agent)
             .timeout(timeout)
             .build()?;
         Ok(Self { client })

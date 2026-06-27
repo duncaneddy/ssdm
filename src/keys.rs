@@ -1,11 +1,8 @@
-//! Mapping from a `Product` to its R2 object key and public URL.
+//! Mapping from a `Product` to its object key and public URL.
 
 use crate::products::Product;
 
-/// Public serving domain (R2 public bucket custom domain).
-pub const DOMAIN: &str = "simplespacedata.org";
-
-/// R2 object key (== public URL path) for a product's latest file.
+/// Object key (== public URL path) for a product's latest file.
 pub fn object_key(p: &Product) -> String {
     format!("{}/{}/{}/latest/{}", p.category, p.source, p.name, p.filename)
 }
@@ -16,9 +13,9 @@ pub fn alias_key(p: &Product) -> Option<String> {
         .map(|alias| format!("{}/{}/{}/latest/{}", p.category, p.source, alias, p.filename))
 }
 
-/// Full public URL for an R2 key.
-pub fn public_url(key: &str) -> String {
-    format!("https://{DOMAIN}/{key}")
+/// Full public URL for an object key, served from `domain`.
+pub fn public_url(domain: &str, key: &str) -> String {
+    format!("https://{domain}/{key}")
 }
 
 #[cfg(test)]
@@ -65,8 +62,8 @@ mod tests {
     #[test]
     fn public_url_prefixes_domain() {
         assert_eq!(
-            public_url("eop/iers/c04/latest/EOP_C04_one_file_1962-now.txt"),
-            "https://simplespacedata.org/eop/iers/c04/latest/EOP_C04_one_file_1962-now.txt"
+            public_url("example.org", "eop/iers/c04/latest/EOP_C04_one_file_1962-now.txt"),
+            "https://example.org/eop/iers/c04/latest/EOP_C04_one_file_1962-now.txt"
         );
     }
 }

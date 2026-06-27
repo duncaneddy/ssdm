@@ -1,5 +1,5 @@
-//! R2 (S3-compatible) object store. Builds signed requests with rusty-s3 and
-//! sends them with reqwest. Write-only from the daemon's perspective.
+//! S3-compatible object store (Cloudflare R2, AWS S3, MinIO, …). Builds signed
+//! requests with rusty-s3 and sends them with reqwest.
 
 use std::time::Duration;
 
@@ -21,13 +21,14 @@ pub struct R2Store {
 impl R2Store {
     pub fn new(cfg: &Config) -> Result<Self> {
         let endpoint = cfg
-            .r2_endpoint
+            .bucket_endpoint
             .parse()
-            .map_err(|e| anyhow!("invalid R2_ENDPOINT {}: {e}", cfg.r2_endpoint))?;
-        // R2 ignores region but the signer requires one; "auto" is conventional.
-        let bucket = Bucket::new(endpoint, UrlStyle::Path, cfg.r2_bucket.clone(), "auto")
+            .map_err(|e| anyhow!("invalid BUCKET_ENDPOINT {}: {e}", cfg.bucket_endpoint))?;
+        // R2 ignores region ("auto"); AWS S3 and some others verify it in the
+        // SigV4 signature, so it's configurable via BUCKET_REGION.
+        let bucket = Bucket::new(endpoint, UrlStyle::Path, cfg.bucket_name.clone(), cfg.bucket_region.clone())
             .map_err(|e| anyhow!("bucket init: {e}"))?;
-        let creds = Credentials::new(cfg.r2_access_key_id.clone(), cfg.r2_secret_access_key.clone());
+        let creds = Credentials::new(cfg.bucket_access_key_id.clone(), cfg.bucket_secret_access_key.clone());
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
             .build()?;

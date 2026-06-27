@@ -44,7 +44,7 @@ pub async fn run_daemon(cfg: &Config) -> anyhow::Result<()> {
     use crate::products::products;
     use crate::store::R2Store;
 
-    let fetcher = HttpFetcher::new(FETCH_TIMEOUT)?;
+    let fetcher = HttpFetcher::new(FETCH_TIMEOUT, &cfg.site_domain)?;
     let store = R2Store::new(cfg)?;
     let mut rate = RateLimiter::new(cfg.host_min_interval, cfg.stagger_jitter);
     let all = products();
@@ -56,7 +56,7 @@ pub async fn run_daemon(cfg: &Config) -> anyhow::Result<()> {
     if cfg.run_on_start {
         info!("RUN_ON_START set — forcing a full sync");
         let refs: Vec<&Product> = all.iter().filter(|p| p.active).collect();
-        crate::sync::run_sync(&all, &refs, &fetcher, &store, &mut rate, &cfg.data_dir, now_ms()).await;
+        crate::sync::run_sync(&all, &refs, &fetcher, &store, &mut rate, &cfg.data_dir, &cfg.site_domain, now_ms()).await;
     }
 
     loop {
@@ -66,7 +66,7 @@ pub async fn run_daemon(cfg: &Config) -> anyhow::Result<()> {
         if !due.is_empty() {
             let refs: Vec<&Product> = due.iter().map(|&i| &all[i]).collect();
             info!("{} product(s) due", refs.len());
-            crate::sync::run_sync(&all, &refs, &fetcher, &store, &mut rate, &cfg.data_dir, now).await;
+            crate::sync::run_sync(&all, &refs, &fetcher, &store, &mut rate, &cfg.data_dir, &cfg.site_domain, now).await;
         }
         let status = crate::local::load_status(&cfg.data_dir);
         let sleep_ms = sleep_until_due_ms(&all, &status, now_ms(), WAKE_CAP.as_millis() as u64);

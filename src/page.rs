@@ -5,17 +5,17 @@ use crate::products::Product;
 
 /// Render the full `index.html`: a centered, self-contained page listing every
 /// product. Freshness/hash cells are filled client-side from `/status.json`.
-pub fn render_index_html(items: &[Product]) -> String {
+pub fn render_index_html(domain: &str, items: &[Product]) -> String {
     let mut rows = String::new();
     for p in items {
         let key = object_key(p);
         let label = format!("{}/{}/{}", p.category, p.source, p.name);
-        push_row(&mut rows, &key, &label, &public_url(&key), p.active);
+        push_row(&mut rows, &key, &label, &public_url(domain, &key), p.active);
         if let Some(akey) = alias_key(p) {
             let alias = p.alias_name.unwrap_or("");
             let alias_label = format!("{}/{}/{} (alias)", p.category, p.source, alias);
             // alias shares the primary key's status (same bytes)
-            push_row(&mut rows, &key, &alias_label, &public_url(&akey), p.active);
+            push_row(&mut rows, &key, &alias_label, &public_url(domain, &akey), p.active);
         }
     }
 
@@ -146,25 +146,25 @@ mod tests {
 
     #[test]
     fn lists_active_product_url() {
-        let html = render_index_html(&sample());
-        assert!(html.contains("https://simplespacedata.org/eop/iers/c04_20u24/latest/EOP_C04_one_file_1962-now.txt"));
+        let html = render_index_html("example.org", &sample());
+        assert!(html.contains("https://example.org/eop/iers/c04_20u24/latest/EOP_C04_one_file_1962-now.txt"));
     }
 
     #[test]
     fn lists_alias_url() {
-        let html = render_index_html(&sample());
-        assert!(html.contains("https://simplespacedata.org/eop/iers/c04/latest/EOP_C04_one_file_1962-now.txt"));
+        let html = render_index_html("example.org", &sample());
+        assert!(html.contains("https://example.org/eop/iers/c04/latest/EOP_C04_one_file_1962-now.txt"));
     }
 
     #[test]
     fn references_brahe() {
-        let html = render_index_html(&sample());
+        let html = render_index_html("example.org", &sample());
         assert!(html.contains("https://github.com/duncaneddy/brahe"));
     }
 
     #[test]
     fn has_freshness_and_hash_columns() {
-        let html = render_index_html(&sample());
+        let html = render_index_html("example.org", &sample());
         assert!(html.contains("Last updated"));
         assert!(html.contains("Last checked"));
         assert!(html.contains("Hash"));
@@ -172,14 +172,14 @@ mod tests {
 
     #[test]
     fn rows_carry_data_key_for_status_lookup() {
-        let html = render_index_html(&sample());
+        let html = render_index_html("example.org", &sample());
         // the active product's object key, used by the client JS to match status.json
         assert!(html.contains("data-key=\"eop/iers/c04_20u24/latest/EOP_C04_one_file_1962-now.txt\""));
     }
 
     #[test]
     fn includes_copy_button_and_status_fetch() {
-        let html = render_index_html(&sample());
+        let html = render_index_html("example.org", &sample());
         assert!(html.contains("class=\"copy\""));
         assert!(html.contains("/status.json"));
     }

@@ -58,7 +58,7 @@ pub async fn run() -> anyhow::Result<()> {
         Command::Daemon => crate::scheduler::run_daemon(&cfg).await,
         Command::Sync { all, product } => {
             let items = products();
-            let fetcher = crate::fetch::HttpFetcher::new(std::time::Duration::from_secs(20))?;
+            let fetcher = crate::fetch::HttpFetcher::new(std::time::Duration::from_secs(20), &cfg.site_domain)?;
             let store = crate::store::R2Store::new(&cfg)?;
             let mut rate = RateLimiter::new(cfg.host_min_interval, cfg.stagger_jitter);
             let now = crate::scheduler::now_ms();
@@ -80,7 +80,7 @@ pub async fn run() -> anyhow::Result<()> {
             };
 
             info!("manual sync over {} product(s)", process.len());
-            let summary = crate::sync::run_sync(&items, &process, &fetcher, &store, &mut rate, &cfg.data_dir, now).await;
+            let summary = crate::sync::run_sync(&items, &process, &fetcher, &store, &mut rate, &cfg.data_dir, &cfg.site_domain, now).await;
             if summary.failed > 0 {
                 anyhow::bail!("{} fetch(es) failed (checked={}, changed={})", summary.failed, summary.checked, summary.changed);
             }

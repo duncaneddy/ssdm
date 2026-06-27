@@ -43,7 +43,10 @@ For a local `cargo run`, also set `DATA_DIR` to a writable local path (e.g.
 3. **Serve the landing page at `/`:** Rules → Transform Rules → Rewrite URL →
    if URI path equals `/`, rewrite path to `/index.html`.
 4. **Create an R2 API token** (Object Read & Write) and put its values in `.env`
-   as `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY`, with `R2_ACCOUNT_ID`.
+   as `BUCKET_ACCESS_KEY_ID` / `BUCKET_SECRET_ACCESS_KEY`. Set `BUCKET_ENDPOINT`
+   to `https://<account-id>.r2.cloudflarestorage.com` and `SITE_DOMAIN` to your
+   public domain. (Storage is S3-generic — point `BUCKET_ENDPOINT`/`BUCKET_REGION`
+   at AWS S3, MinIO, etc. to use a different provider.)
 
 ## Deploy
 
