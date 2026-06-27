@@ -21,4 +21,7 @@ max_batch_timeout = 30
 max_retries       = 20
 
 [triggers]
-crons = ["0 6 * * *"]
+# 06:17 UTC — offset from the top of the hour (and off the common :00/:15/:30
+# cron marks) so our upstream fetches avoid the herd hitting IERS/CelesTrak at
+# exact update times.
+crons = ["17 6 * * *"]
