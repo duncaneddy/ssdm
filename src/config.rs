@@ -15,6 +15,8 @@ pub struct Config {
     pub bucket_name: String,
     pub bucket_endpoint: String,
     pub bucket_region: String,
+    /// S3 URL addressing style: "path" (R2, MinIO, …) or "virtual" (AWS S3 vhost).
+    pub bucket_url_style: String,
     pub bucket_access_key_id: String,
     pub bucket_secret_access_key: String,
     /// Public serving domain (the S3 bucket's CDN/custom domain), used to build
@@ -39,6 +41,7 @@ pub fn from_map(m: &HashMap<String, String>) -> Result<Config> {
 
     let bucket_name = m.get("BUCKET_NAME").cloned().unwrap_or_else(|| "ssdm-data".into());
     let bucket_region = m.get("BUCKET_REGION").cloned().unwrap_or_else(|| "auto".into());
+    let bucket_url_style = m.get("BUCKET_URL_STYLE").cloned().unwrap_or_else(|| "path".into());
     let data_dir = PathBuf::from(m.get("DATA_DIR").cloned().unwrap_or_else(|| "/data".into()));
     let run_on_start = m.get("RUN_ON_START").map(|v| v == "true" || v == "1").unwrap_or(false);
 
@@ -55,6 +58,7 @@ pub fn from_map(m: &HashMap<String, String>) -> Result<Config> {
         bucket_name,
         bucket_endpoint,
         bucket_region,
+        bucket_url_style,
         bucket_access_key_id,
         bucket_secret_access_key,
         site_domain,
@@ -84,6 +88,7 @@ mod tests {
         let c = from_map(&base()).unwrap();
         assert_eq!(c.bucket_name, "ssdm-data");
         assert_eq!(c.bucket_region, "auto");
+        assert_eq!(c.bucket_url_style, "path");
         assert_eq!(c.bucket_endpoint, "https://example.test");
         assert_eq!(c.site_domain, "example.org");
         assert_eq!(c.data_dir.to_str().unwrap(), "/data");

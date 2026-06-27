@@ -24,9 +24,15 @@ impl R2Store {
             .bucket_endpoint
             .parse()
             .map_err(|e| anyhow!("invalid BUCKET_ENDPOINT {}: {e}", cfg.bucket_endpoint))?;
+        // Path-style works for R2/MinIO/B2/Wasabi; AWS S3 may require virtual-hosted.
+        let url_style = match cfg.bucket_url_style.to_lowercase().as_str() {
+            "path" => UrlStyle::Path,
+            "virtual" | "vhost" | "virtual-host" | "virtual_host" => UrlStyle::VirtualHost,
+            other => return Err(anyhow!("invalid BUCKET_URL_STYLE '{other}' (expected 'path' or 'virtual')")),
+        };
         // R2 ignores region ("auto"); AWS S3 and some others verify it in the
         // SigV4 signature, so it's configurable via BUCKET_REGION.
-        let bucket = Bucket::new(endpoint, UrlStyle::Path, cfg.bucket_name.clone(), cfg.bucket_region.clone())
+        let bucket = Bucket::new(endpoint, url_style, cfg.bucket_name.clone(), cfg.bucket_region.clone())
             .map_err(|e| anyhow!("bucket init: {e}"))?;
         let creds = Credentials::new(cfg.bucket_access_key_id.clone(), cfg.bucket_secret_access_key.clone());
         let client = reqwest::Client::builder()
