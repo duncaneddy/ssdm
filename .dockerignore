@@ -1,0 +1,6 @@
+target
+build
+.git
+.wrangler
+node_modules
+docs

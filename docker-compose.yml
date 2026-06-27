@@ -1,0 +1,11 @@
+services:
+  ssdm:
+    build: .
+    image: ssdm:latest
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ssdm-data:/data
+
+volumes:
+  ssdm-data:
