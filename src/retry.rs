@@ -1,43 +1,33 @@
-//! Elapsed-based retry/backoff/drop policy for the queue consumer.
-//!
-//! worker 0.8.5 `Message` does not expose an attempt counter, so backoff is a
-//! function of elapsed time since the message was enqueued. `next_delay_secs`
-//! clamps the elapsed time into [BASE, CAP], which produces a capped-exponential
-//! (doubling) curve: each wait is ~the total elapsed so far, up to the cap.
+//! Short, bounded retry policy for a single product fetch within one sync pass.
+//! The product's own interval is the long-term retry; in-run retries only smooth
+//! over transient blips, so they are few and quick.
 
-pub const BACKOFF_BASE_SECS: u64 = 300; // 5 min
-pub const BACKOFF_CAP_SECS: u64 = 3600; // 1 h
-pub const DROP_AFTER_SECS: u64 = 28_800; // 8 h
+use std::time::Duration;
 
-/// Delay before the next delivery, given seconds elapsed since enqueue.
-pub fn next_delay_secs(elapsed_secs: u64) -> u32 {
-    elapsed_secs.clamp(BACKOFF_BASE_SECS, BACKOFF_CAP_SECS) as u32
+/// Total fetch attempts before giving up on a product for this pass.
+pub const MAX_ATTEMPTS: u32 = 5;
+
+const BASE: Duration = Duration::from_secs(1);
+const CAP: Duration = Duration::from_secs(30);
+
+/// Delay before retry `attempt` (1-based). Capped exponential: 1s, 2s, 4s, 8s, …≤30s.
+pub fn backoff_delay(attempt: u32) -> Duration {
+    let shift = attempt.saturating_sub(1).min(20);
+    let secs = BASE.as_secs().saturating_mul(1u64 << shift);
+    Duration::from_secs(secs).min(CAP)
 }
-
-/// True once the message has lived past the 8h window and must be dropped.
-pub fn should_drop(elapsed_secs: u64) -> bool {
-    elapsed_secs >= DROP_AFTER_SECS
-}
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn delay_starts_at_base_and_caps() {
-        assert_eq!(next_delay_secs(0), 300);
-        assert_eq!(next_delay_secs(300), 300);
-        assert_eq!(next_delay_secs(1200), 1200);
-        assert_eq!(next_delay_secs(5000), 3600); // capped at 1h
+    fn backoff_is_capped_exponential() {
+        assert_eq!(backoff_delay(1), Duration::from_secs(1));
+        assert_eq!(backoff_delay(2), Duration::from_secs(2));
+        assert_eq!(backoff_delay(3), Duration::from_secs(4));
+        assert_eq!(backoff_delay(4), Duration::from_secs(8));
+        assert_eq!(backoff_delay(5), Duration::from_secs(16));
+        assert_eq!(backoff_delay(99), Duration::from_secs(30), "capped at 30s");
     }
-
-    #[test]
-    fn drops_only_after_eight_hours() {
-        assert!(!should_drop(0));
-        assert!(!should_drop(28_799));
-        assert!(should_drop(28_800));
-        assert!(should_drop(40_000));
-    }
-
 }
