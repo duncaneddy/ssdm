@@ -123,6 +123,7 @@ fn push_row(out: &mut String, key: &str, label: &str, url: &str, active: bool) {
 mod tests {
     use super::*;
     use crate::products::Product;
+    use std::time::Duration;
 
     fn sample() -> Vec<Product> {
         vec![
@@ -131,12 +132,14 @@ mod tests {
                 url: "https://example.test/x".into(),
                 filename: "EOP_C04_one_file_1962-now.txt".into(),
                 content_type: "text/plain", active: true, alias_name: Some("c04"),
+                interval: Duration::from_secs(3600),
             },
             Product {
                 category: "eop", source: "iers", name: "c04_19u20",
                 url: "https://example.test/old".into(),
                 filename: "EOP_C04_one_file_1962-now.txt".into(),
                 content_type: "text/plain", active: false, alias_name: None,
+                interval: Duration::from_secs(3600),
             },
         ]
     }

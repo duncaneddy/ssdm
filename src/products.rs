@@ -1,6 +1,7 @@
 //! Product registry: the single source of truth for everything the mirror fetches.
 
 use std::collections::HashSet;
+use std::time::Duration;
 
 /// One mirrored file.
 pub struct Product {
@@ -12,6 +13,7 @@ pub struct Product {
     pub content_type: &'static str,
     pub active: bool,              // false → not fetched; existing object stays frozen
     pub alias_name: Option<&'static str>, // also written under this stable path segment
+    pub interval: Duration,
 }
 
 /// CelesTrak GP groups mirrored as JSON (latest-only).
@@ -28,18 +30,21 @@ pub fn products() -> Vec<Product> {
             url: "https://datacenter.iers.org/data/latestVersion/finals.all.iau2000.txt".into(),
             filename: "finals.all.iau2000.txt".into(),
             content_type: "text/plain", active: true, alias_name: None,
+            interval: Duration::from_secs(24 * 3600),
         },
         Product {
             category: "eop", source: "iers", name: "c04_20u24",
             url: "https://datacenter.iers.org/data/latestVersion/EOP_20u24_C04_one_file_1962-now.txt".into(),
             filename: "EOP_C04_one_file_1962-now.txt".into(),
             content_type: "text/plain", active: true, alias_name: Some("c04"),
+            interval: Duration::from_secs(7 * 24 * 3600),
         },
         Product {
             category: "space_weather", source: "celestrak", name: "sw_all",
             url: "https://celestrak.org/SpaceData/sw19571001.txt".into(),
             filename: "sw19571001.txt".into(),
             content_type: "text/plain", active: true, alias_name: None,
+            interval: Duration::from_secs(6 * 3600),
         },
     ];
 
@@ -49,6 +54,7 @@ pub fn products() -> Vec<Product> {
             url: format!("https://celestrak.org/NORAD/elements/gp.php?GROUP={slug}&FORMAT=json"),
             filename: format!("{slug}.json"),
             content_type: "application/json", active: true, alias_name: None,
+            interval: Duration::from_secs(2 * 3600),
         });
     }
 
@@ -74,6 +80,7 @@ pub fn validate_registry(items: &[Product]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
 
     #[test]
     fn registry_has_13_active_products() {
@@ -110,12 +117,25 @@ mod tests {
     }
 
     #[test]
+    fn products_have_expected_intervals() {
+        use std::time::Duration;
+        let items = products();
+        let get = |name: &str| items.iter().find(|p| p.name == name).unwrap().interval;
+        assert_eq!(get("finals_all"), Duration::from_secs(24 * 3600));
+        assert_eq!(get("c04_20u24"), Duration::from_secs(7 * 24 * 3600));
+        assert_eq!(get("sw_all"), Duration::from_secs(6 * 3600));
+        assert_eq!(get("starlink"), Duration::from_secs(2 * 3600));
+    }
+
+    #[test]
     fn duplicate_active_alias_is_rejected() {
         let dupes = vec![
             Product { category: "eop", source: "iers", name: "c04_a", url: "u".into(),
-                filename: "f".into(), content_type: "text/plain", active: true, alias_name: Some("c04") },
+                filename: "f".into(), content_type: "text/plain", active: true, alias_name: Some("c04"),
+                interval: Duration::from_secs(3600) },
             Product { category: "eop", source: "iers", name: "c04_b", url: "u".into(),
-                filename: "f".into(), content_type: "text/plain", active: true, alias_name: Some("c04") },
+                filename: "f".into(), content_type: "text/plain", active: true, alias_name: Some("c04"),
+                interval: Duration::from_secs(3600) },
         ];
         assert!(validate_registry(&dupes).is_err());
     }

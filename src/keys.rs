@@ -25,6 +25,7 @@ pub fn public_url(key: &str) -> String {
 mod tests {
     use super::*;
     use crate::products::Product;
+    use std::time::Duration;
 
     fn c04() -> Product {
         Product {
@@ -32,6 +33,7 @@ mod tests {
             url: "https://example.test/x".into(),
             filename: "EOP_C04_one_file_1962-now.txt".into(),
             content_type: "text/plain", active: true, alias_name: Some("c04"),
+            interval: Duration::from_secs(3600),
         }
     }
 
@@ -41,6 +43,7 @@ mod tests {
             url: "https://example.test/y".into(),
             filename: "finals.all.iau2000.txt".into(),
             content_type: "text/plain", active: true, alias_name: None,
+            interval: Duration::from_secs(3600),
         }
     }
 
