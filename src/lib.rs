@@ -3,5 +3,6 @@
 pub mod keys;
 pub mod page;
 pub mod products;
+pub mod ratelimit;
 pub mod retry;
 pub mod status;
