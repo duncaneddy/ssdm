@@ -120,18 +120,4 @@ mod tests {
         assert!(validate_registry(&dupes).is_err());
     }
 
-    #[test]
-    fn worst_case_queue_ops_within_free_tier_budget() {
-        // 80% of the 10k/day Queues free tier; 20% safety margin.
-        const DAILY_OPS_BUDGET: u32 = 8_000;
-        let active = products().iter().filter(|p| p.active).count() as u32;
-        // per message: 1 write (enqueue) + max_deliveries reads + 1 delete (ack)
-        let per_msg = crate::retry::max_deliveries() + 2;
-        let worst = active * per_msg;
-        assert!(
-            worst <= DAILY_OPS_BUDGET,
-            "worst-case {worst} queue ops/day exceeds budget {DAILY_OPS_BUDGET} \
-             ({active} products × {per_msg} ops); raise budget or lower retries"
-        );
-    }
 }

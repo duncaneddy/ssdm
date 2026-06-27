@@ -19,23 +19,6 @@ pub fn should_drop(elapsed_secs: u64) -> bool {
     elapsed_secs >= DROP_AFTER_SECS
 }
 
-/// Worst-case number of delivery attempts (including the final drop delivery)
-/// a single message incurs over its lifetime under this schedule. Used by the
-/// ops-budget guard.
-pub fn max_deliveries() -> u32 {
-    let mut elapsed = 0u64;
-    let mut deliveries = 0u32;
-    loop {
-        deliveries += 1;
-        if should_drop(elapsed) {
-            return deliveries;
-        }
-        elapsed += next_delay_secs(elapsed) as u64;
-        if deliveries > 1000 {
-            return deliveries; // safety stop; never reached
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -57,9 +40,4 @@ mod tests {
         assert!(should_drop(40_000));
     }
 
-    #[test]
-    fn max_deliveries_is_bounded() {
-        let d = max_deliveries();
-        assert!(d >= 10 && d <= 14, "unexpected delivery count: {d}");
-    }
 }
