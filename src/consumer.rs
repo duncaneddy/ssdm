@@ -32,10 +32,11 @@ pub async fn run_consumer(batch: MessageBatch<IngestMessage>, env: &Env) -> Resu
     let bucket = env.bucket("BUCKET")?;
     let messages = batch.messages()?;
 
-    // 1. Fetch each message's product (sequentially; batch is small).
-    //    Collect successes for a single status update; ack/retry failures.
-    let now = Date::now().as_millis();
+    // 1. Fetch each product. Stash successes but do NOT ack yet — a message is
+    //    acked only after its bytes are durably in R2 (step 3). Drop/retry
+    //    failures using a fresh timestamp so elapsed reflects real wall time.
     let mut fetched: Vec<Fetched> = Vec::new();
+    let mut to_ack: Vec<&Message<IngestMessage>> = Vec::new();
 
     for msg in &messages {
         let body = msg.body().clone();
@@ -43,17 +44,16 @@ pub async fn run_consumer(batch: MessageBatch<IngestMessage>, env: &Env) -> Resu
             Ok(bytes) => {
                 let hash = content_hash(&bytes);
                 fetched.push(Fetched { body, bytes, hash });
-                msg.ack();
+                to_ack.push(msg);
             }
             Err(e) => {
-                let elapsed = now.saturating_sub(body.enqueued_at) / 1000;
+                let elapsed = Date::now().as_millis().saturating_sub(body.enqueued_at) / 1000;
                 if should_drop(elapsed) {
                     console_error!("dropping {} after {}s: {}", body.key, elapsed, e);
                     msg.ack();
                 } else {
-                    let delay = next_delay_secs(elapsed);
                     let opts = QueueRetryOptionsBuilder::new()
-                        .with_delay_seconds(delay)
+                        .with_delay_seconds(next_delay_secs(elapsed))
                         .build();
                     msg.retry_with_options(&opts);
                 }
@@ -65,8 +65,10 @@ pub async fn run_consumer(batch: MessageBatch<IngestMessage>, env: &Env) -> Resu
         return Ok(());
     }
 
-    // 2. Read status.json once, decide per product whether content changed,
-    //    write changed bytes (+alias) to R2.
+    // 2. Read status once; write changed bytes (+alias) to R2. If reading status
+    //    or any data write fails, return early WITHOUT acking — Cloudflare
+    //    re-delivers and we re-fetch (idempotent).
+    let now = Date::now().as_millis();
     let (mut status, etag) = read_status(&bucket).await?;
     for f in &fetched {
         let changed = apply_update(&mut status, &f.body.key, &f.hash, f.bytes.len() as u64, now);
@@ -86,7 +88,13 @@ pub async fn run_consumer(batch: MessageBatch<IngestMessage>, env: &Env) -> Resu
         }
     }
 
-    // 3. Write status.json back with a conditional (CAS) loop.
+    // 3. Bytes are durable — now ack the successful messages.
+    for msg in &to_ack {
+        msg.ack();
+    }
+
+    // 4. Best-effort status.json update (CAS). If it can't land, the daily cron
+    //    re-enqueues every product and refreshes status within 24h.
     write_status_cas(&bucket, status, etag, &fetched, now).await
 }
 
@@ -134,11 +142,18 @@ async fn write_status_cas(
                     return Ok(()); // data already written; status updates next run
                 }
                 // Conflict (or other) — re-read and re-apply our entries.
-                let (fresh, fresh_etag) = read_status(bucket).await?;
-                status = fresh;
-                etag = fresh_etag;
-                for f in fetched {
-                    apply_update(&mut status, &f.body.key, &f.hash, f.bytes.len() as u64, now_ms);
+                match read_status(bucket).await {
+                    Ok((fresh, fresh_etag)) => {
+                        status = fresh;
+                        etag = fresh_etag;
+                        for f in fetched {
+                            apply_update(&mut status, &f.body.key, &f.hash, f.bytes.len() as u64, now_ms);
+                        }
+                    }
+                    Err(re) => {
+                        console_error!("status.json re-read failed during CAS: {re}");
+                        return Ok(());
+                    }
                 }
             }
         }
