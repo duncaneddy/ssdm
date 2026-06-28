@@ -79,24 +79,33 @@ function rel(ms){{
   return Math.round(s/86400)+"d ago";
 }}
 function abs(ms){{ return ms ? new Date(ms).toISOString() : ""; }}
+function fmtSize(b){{
+  if(!b) return "—";
+  if(b<1024) return b+" B";
+  var u=["KB","MB","GB","TB"], i=-1;
+  do {{ b/=1024; i++; }} while(b>=1024 && i<u.length-1);
+  return b.toFixed(1)+" "+u[i];
+}}
 fetch("/status.json").then(function(r){{return r.ok?r.json():{{}};}}).then(function(st){{
   document.querySelectorAll("tr[data-key]").forEach(function(tr){{
     var e=st[tr.getAttribute("data-key")]; if(!e) return;
     var up=tr.querySelector(".updated"), ck=tr.querySelector(".checked"),
-        hs=tr.querySelector(".hashval"), bt=tr.querySelector(".copy");
+        hs=tr.querySelector(".hashval"), bt=tr.querySelector(".hash .copy"),
+        sz=tr.querySelector(".sizeval");
     up.textContent=rel(e.last_updated); up.title=abs(e.last_updated);
     ck.textContent=rel(e.last_checked); ck.title=abs(e.last_checked);
+    if(sz){{ sz.textContent=fmtSize(e.size); if(e.size) sz.title=e.size+" bytes"; }}
     var iv=parseFloat(tr.getAttribute("data-interval-ms"))||0;
     if(e.last_checked && iv){{
       var ratio=(Date.now()-e.last_checked)/iv;
       tr.classList.add(ratio<1.25?"ok":(ratio<2.25?"warn":"bad"));
     }}
-    if(e.hash){{ hs.textContent=e.hash.slice(0,12)+"…"; bt.dataset.hash=e.hash; bt.hidden=false; }}
+    if(e.hash){{ hs.textContent=e.hash.slice(0,12)+"…"; bt.dataset.copy=e.hash; bt.hidden=false; }}
   }});
 }}).catch(function(){{}});
 document.addEventListener("click",function(ev){{
-  var b=ev.target.closest(".copy"); if(!b||!b.dataset.hash) return;
-  navigator.clipboard.writeText(b.dataset.hash).then(function(){{
+  var b=ev.target.closest(".copy"); if(!b||!b.dataset.copy) return;
+  navigator.clipboard.writeText(b.dataset.copy).then(function(){{
     var t=b.textContent; b.textContent="copied"; setTimeout(function(){{b.textContent=t;}},1200);
   }});
 }});
@@ -115,6 +124,7 @@ fn esc_attr(s: &str) -> String {
 fn push_row(out: &mut String, p: &Product, key: &str, label: &str, url: &str) {
     let cls = if p.active { "" } else { " class=\"discontinued\"" };
     let interval_ms = p.schedule.nominal_period().as_millis();
+    let url_attr = esc_attr(url);
 
     let mut links = format!(
         " <a class=\"src\" href=\"{}\" title=\"Upstream source\">source</a>",
@@ -137,7 +147,9 @@ fn push_row(out: &mut String, p: &Product, key: &str, label: &str, url: &str) {
 <td class=\"dotcell\"><span class=\"dot\"></span></td>\
 <td>{label}<span class=\"links\">{links}</span></td>\
 <td class=\"freq\">{freq}</td>\
-<td class=\"dl\"><a href=\"{url}\">{url}</a></td>\
+<td class=\"dl\"><a href=\"{url}\">{url}</a>\
+<button class=\"copy\" data-copy=\"{url_attr}\">copy</button></td>\
+<td class=\"size\"><span class=\"sizeval\">\u{2014}</span></td>\
 <td class=\"rel updated\">\u{2014}</td>\
 <td class=\"rel checked\">\u{2014}</td>\
 <td class=\"hash\"><span class=\"hashval\">\u{2014}</span>\
@@ -193,7 +205,7 @@ fn render_sections(domain: &str, items: &[Product]) -> String {
             out.push_str(&format!("<h2 class=\"prov\">{}</h2>\n", provider_label(prov)));
             out.push_str(
                 "<div class=\"tw\"><table>\n<thead><tr>\
-<th class=\"dh\"></th><th>Product</th><th>Frequency</th><th>Mirror URL</th><th>Last updated</th><th>Last checked</th><th>Hash (md5)</th>\
+<th class=\"dh\"></th><th>Product</th><th>Frequency</th><th>Mirror URL</th><th>Size</th><th>Last updated</th><th>Last checked</th><th>Hash (md5)</th>\
 </tr></thead>\n<tbody>\n",
             );
             for p in items.iter().filter(|p| p.category == cat && p.source == prov) {
@@ -340,6 +352,23 @@ mod tests {
         let html = render_index_html("example.org", &sample());
         assert!(html.contains("class=\"copy\""));
         assert!(html.contains("/status.json"));
+    }
+
+    #[test]
+    fn has_size_column() {
+        let html = render_index_html("example.org", &sample());
+        assert!(html.contains(">Size<"), "Size column header present");
+        assert!(html.contains("class=\"sizeval\""), "size cell populated client-side");
+        assert!(html.contains("function fmtSize"), "human-readable size formatter present");
+    }
+
+    #[test]
+    fn url_has_copy_button() {
+        let html = render_index_html("example.org", &sample());
+        // the active product's full mirror URL is copyable via a data-copy button
+        assert!(html.contains(
+            "data-copy=\"https://example.org/eop/iers/c04_20u24/latest/EOP_C04_one_file_1962-now.txt\""
+        ));
     }
 
     #[test]
