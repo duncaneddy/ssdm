@@ -68,13 +68,6 @@ pub fn record_attempt(status: &mut Status, key: &str, now_ms: u64) {
     status.insert(key.to_string(), e);
 }
 
-/// True when a product should be fetched: never attempted, or its interval elapsed.
-pub fn is_due(status: &Status, key: &str, interval: std::time::Duration, now_ms: u64) -> bool {
-    match status.get(key) {
-        None => true,
-        Some(e) => now_ms.saturating_sub(e.last_attempt) >= interval.as_millis() as u64,
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -163,13 +156,5 @@ mod tests {
         assert!(e.hash.is_empty());
     }
 
-    #[test]
-    fn is_due_when_absent_or_interval_elapsed() {
-        use std::time::Duration;
-        let mut s = Status::new();
-        assert!(is_due(&s, "k", Duration::from_secs(60), 1000), "absent => due");
-        apply_update(&mut s, "k", "h", 1, 1000);
-        assert!(!is_due(&s, "k", Duration::from_secs(60), 1000 + 59_000));
-        assert!(is_due(&s, "k", Duration::from_secs(60), 1000 + 60_000));
-    }
+
 }

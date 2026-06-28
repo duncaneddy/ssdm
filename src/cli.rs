@@ -92,6 +92,7 @@ pub async fn run() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::schedule::Schedule;
     use clap::Parser;
     use std::time::Duration;
 
@@ -101,7 +102,7 @@ mod tests {
             url: format!("https://h/{name}"), filename: format!("{name}.json"),
             content_type: "application/json", active, alias_name: None,
             info_url: None, cadence_label: None,
-            interval: Duration::from_secs(3600),
+            schedule: Schedule::Every(Duration::from_secs(3600)),
         }
     }
 
