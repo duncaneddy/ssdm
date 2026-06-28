@@ -192,6 +192,7 @@ mod tests {
             category: "catalog", source: "celestrak", name: Box::leak(name.to_string().into_boxed_str()),
             url: url.into(), filename: format!("{name}.json"),
             content_type: "application/json", active: true, alias_name: None,
+            info_url: None, cadence_label: None,
             interval: Duration::from_secs(3600),
         }
     }
