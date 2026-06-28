@@ -80,7 +80,7 @@ fn most_recent_anchor(weekday: Weekday, tod_ms: u64, now_ms: u64) -> u64 {
     let current_weekday = ((day + 3) % 7) as u8; // epoch day 0 was Thursday
     let wd = weekday as u8;
     let delta = (current_weekday + 7 - wd) % 7; // whole days since the target weekday
-    let candidate = (day - delta as u64) * DAY_MS + tod_ms;
+    let candidate = day.saturating_sub(delta as u64) * DAY_MS + tod_ms;
     if candidate > now_ms {
         candidate.saturating_sub(WEEK_MS) // today is the target weekday but before `tod_ms`
     } else {
@@ -150,5 +150,14 @@ mod tests {
         assert_eq!(Schedule::Every(Duration::from_secs(7200)).nominal_period(),
                    Duration::from_secs(7200));
         assert_eq!(weekly_thu().nominal_period(), Duration::from_secs(7 * 24 * 3600));
+    }
+
+    #[test]
+    fn anchor_does_not_underflow_for_early_epoch_non_thursday_target() {
+        // now = day 2 (Saturday, since epoch day 0 = Thursday), well within the first week.
+        let now = 2 * DAY + 3_600_000;
+        // Sunday target => delta (2 - 6 mod 7) = 6 would drive day-delta negative pre-fix.
+        let anchor = most_recent_anchor(Weekday::Sun, 0, now);
+        assert!(anchor <= now, "anchor must be at or before now");
     }
 }
