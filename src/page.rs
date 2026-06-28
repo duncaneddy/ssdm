@@ -157,6 +157,7 @@ fn category_label(cat: &str) -> &str {
 fn provider_label(src: &str) -> &str {
     match src {
         "iers" => "IERS",
+        "usno" => "USNO",
         "celestrak" => "CelesTrak",
         other => other,
     }

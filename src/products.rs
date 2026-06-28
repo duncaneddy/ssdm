@@ -46,6 +46,24 @@ pub fn products() -> Vec<Product> {
             interval: Duration::from_secs(7 * 24 * 3600),
         },
         Product {
+            category: "eop", source: "usno", name: "finals2000a_all",
+            url: "https://maia.usno.navy.mil/ser7/finals2000A.all".into(),
+            filename: "finals2000A.all".into(),
+            content_type: "text/plain", active: true, alias_name: None,
+            info_url: Some("https://maia.usno.navy.mil/ser7/readme"),
+            cadence_label: None,
+            interval: Duration::from_secs(7 * 24 * 3600),
+        },
+        Product {
+            category: "eop", source: "usno", name: "finals2000a_daily",
+            url: "https://maia.usno.navy.mil/ser7/finals2000A.daily".into(),
+            filename: "finals2000A.daily".into(),
+            content_type: "text/plain", active: true, alias_name: None,
+            info_url: Some("https://maia.usno.navy.mil/ser7/readme"),
+            cadence_label: None,
+            interval: Duration::from_secs(24 * 3600),
+        },
+        Product {
             category: "space_weather", source: "celestrak", name: "sw_all",
             url: "https://celestrak.org/SpaceData/sw19571001.txt".into(),
             filename: "sw19571001.txt".into(),
@@ -93,9 +111,30 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn registry_has_13_active_products() {
+    fn registry_has_15_active_products() {
         let items = products();
-        assert_eq!(items.iter().filter(|p| p.active).count(), 13);
+        assert_eq!(items.iter().filter(|p| p.active).count(), 15);
+    }
+
+    #[test]
+    fn usno_finals2000a_entries_present() {
+        let items = products();
+
+        let all = items.iter().find(|p| p.name == "finals2000a_all").expect("finals2000a_all present");
+        assert_eq!(all.category, "eop");
+        assert_eq!(all.source, "usno");
+        assert_eq!(all.filename, "finals2000A.all");
+        assert_eq!(all.url, "https://maia.usno.navy.mil/ser7/finals2000A.all");
+        assert_eq!(all.interval, Duration::from_secs(7 * 24 * 3600));
+        assert_eq!(all.alias_name, None);
+
+        let daily = items.iter().find(|p| p.name == "finals2000a_daily").expect("finals2000a_daily present");
+        assert_eq!(daily.category, "eop");
+        assert_eq!(daily.source, "usno");
+        assert_eq!(daily.filename, "finals2000A.daily");
+        assert_eq!(daily.url, "https://maia.usno.navy.mil/ser7/finals2000A.daily");
+        assert_eq!(daily.interval, Duration::from_secs(24 * 3600));
+        assert_eq!(daily.alias_name, None);
     }
 
     #[test]
