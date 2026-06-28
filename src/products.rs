@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
-use crate::schedule::Schedule;
+use crate::schedule::{Schedule, Weekday};
 
 /// One mirrored file.
 pub struct Product {
@@ -54,7 +54,10 @@ pub fn products() -> Vec<Product> {
             content_type: "text/plain", active: true, alias_name: None,
             info_url: Some("https://maia.usno.navy.mil/ser7/readme"),
             cadence_label: None,
-            schedule: Schedule::Every(Duration::from_secs(7 * 24 * 3600)),
+            schedule: Schedule::WeeklyAt {
+                weekday: Weekday::Thu,
+                time: Duration::from_secs(18 * 3600 + 15 * 60),
+            },
         },
         Product {
             category: "eop", source: "usno", name: "finals2000a_daily",
@@ -127,7 +130,13 @@ mod tests {
         assert_eq!(all.source, "usno");
         assert_eq!(all.filename, "finals2000A.all");
         assert_eq!(all.url, "https://maia.usno.navy.mil/ser7/finals2000A.all");
-        assert_eq!(all.schedule, Schedule::Every(Duration::from_secs(7 * 24 * 3600)));
+        assert_eq!(
+            all.schedule,
+            Schedule::WeeklyAt {
+                weekday: Weekday::Thu,
+                time: Duration::from_secs(18 * 3600 + 15 * 60),
+            }
+        );
         assert_eq!(all.alias_name, None);
 
         let daily = items.iter().find(|p| p.name == "finals2000a_daily").expect("finals2000a_daily present");

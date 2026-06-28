@@ -414,4 +414,22 @@ mod tests {
         assert!(html.contains("https://github.com/duncaneddy/ssdm"), "repo link");
         assert!(html.contains("https://github.com/duncaneddy/ssdm/issues/new"), "open-an-issue link");
     }
+
+    #[test]
+    fn weekly_schedule_renders_weekday_and_time() {
+        let items = vec![Product {
+            category: "eop", source: "usno", name: "finals2000a_all",
+            url: "https://maia.usno.navy.mil/ser7/finals2000A.all".into(),
+            filename: "finals2000A.all".into(),
+            content_type: "text/plain", active: true, alias_name: None,
+            info_url: None, cadence_label: None,
+            schedule: Schedule::WeeklyAt {
+                weekday: Weekday::Thu,
+                time: std::time::Duration::from_secs(18 * 3600 + 15 * 60),
+            },
+        }];
+        let html = render_index_html("example.org", &items);
+        assert!(html.contains("Thursdays from 18:15 UTC"), "weekly frequency text");
+        assert!(html.contains("data-interval-ms=\"604800000\""), "weekly nominal period = 7d");
+    }
 }
