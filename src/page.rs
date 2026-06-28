@@ -66,8 +66,7 @@ sources. Each file refreshes on its own schedule
 (from every few hours to weekly) and are served at stable URLs of the form
 <code>/&lt;category&gt;/&lt;source&gt;/&lt;name&gt;/latest/&lt;filename&gt;</code>.</p>
 </header>
-{sections}<footer>Freshness and hashes load from <code>/status.json</code>.<br>
-Source on <a href="https://github.com/duncaneddy/ssdm">GitHub</a> — found a bug or have a suggestion?
+{sections}<footer>Source on <a href="https://github.com/duncaneddy/ssdm">GitHub</a> — found a bug or have a suggestion?
 <a href="https://github.com/duncaneddy/ssdm/issues/new">Open an issue</a>.</footer>
 <script>
 function rel(ms){{
@@ -265,6 +264,18 @@ mod tests {
     fn lists_alias_url() {
         let html = render_index_html("example.org", &sample());
         assert!(html.contains("https://example.org/eop/iers/c04/latest/EOP_C04_one_file_1962-now.txt"));
+    }
+
+    #[test]
+    fn alias_row_uses_canonical_data_key() {
+        let html = render_index_html("example.org", &sample());
+        // The alias is served at its own stable URL...
+        assert!(html.contains("https://example.org/eop/iers/c04/latest/EOP_C04_one_file_1962-now.txt"));
+        // ...but the alias path must NEVER appear as a status-lookup data-key:
+        // status.json is keyed by canonical path only, so the alias row must
+        // carry the PRIMARY product's key or its freshness/hash never resolve.
+        assert!(!html.contains("data-key=\"eop/iers/c04/latest/"));
+        assert!(html.contains("data-key=\"eop/iers/c04_20u24/latest/EOP_C04_one_file_1962-now.txt\""));
     }
 
     #[test]
