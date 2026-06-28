@@ -82,7 +82,7 @@ fn most_recent_anchor(weekday: Weekday, tod_ms: u64, now_ms: u64) -> u64 {
     let delta = (current_weekday + 7 - wd) % 7; // whole days since the target weekday
     let candidate = (day - delta as u64) * DAY_MS + tod_ms;
     if candidate > now_ms {
-        candidate - WEEK_MS // today is the target weekday but before `tod_ms`
+        candidate.saturating_sub(WEEK_MS) // today is the target weekday but before `tod_ms`
     } else {
         candidate
     }
