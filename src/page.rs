@@ -59,9 +59,10 @@ footer a{{color:inherit;text-decoration:underline}}
 <body>
 <header>
 <h1>Simple Space Data Mirror</h1>
-<p>A public mirror of Earth Orientation Parameter (EOP) and space-weather data files,
-plus selected CelesTrak orbital element sets, maintained for use with
-<a href="https://github.com/duncaneddy/brahe">Brahe</a>. Each file refreshes on its own schedule
+<p>A public mirror of major public space data sources commonly used in astrodynamics
+computations. Developed and maintained for use with
+<a href="https://github.com/duncaneddy/brahe">brahe</a> to provide redundancy in parameter
+sources. Each file refreshes on its own schedule
 (from every few hours to weekly) and are served at stable URLs of the form
 <code>/&lt;category&gt;/&lt;source&gt;/&lt;name&gt;/latest/&lt;filename&gt;</code>.</p>
 </header>
@@ -270,6 +271,13 @@ mod tests {
     fn references_brahe() {
         let html = render_index_html("example.org", &sample());
         assert!(html.contains("https://github.com/duncaneddy/brahe"));
+    }
+
+    #[test]
+    fn header_describes_astrodynamics_purpose() {
+        let html = render_index_html("example.org", &sample());
+        assert!(html.contains("astrodynamics"));
+        assert!(html.contains("redundancy in parameter"));
     }
 
     #[test]
