@@ -69,6 +69,15 @@ pub fn products() -> Vec<Product> {
             schedule: Schedule::Every(Duration::from_secs(24 * 3600)),
         },
         Product {
+            category: "eop", source: "obspm", name: "c04_iau2000",
+            url: "https://hpiers.obspm.fr/iers/eop/eopc04/eopc04_IAU2000.62-now".into(),
+            filename: "eopc04_IAU2000.62-now".into(),
+            content_type: "text/plain", active: true, alias_name: None,
+            info_url: Some("https://hpiers.obspm.fr/iers/eop/eopc04/readme"),
+            cadence_label: None,
+            schedule: Schedule::Every(Duration::from_secs(24 * 3600)),
+        },
+        Product {
             category: "space_weather", source: "celestrak", name: "sw_all",
             url: "https://celestrak.org/SpaceData/sw19571001.txt".into(),
             filename: "sw19571001.txt".into(),
@@ -116,9 +125,9 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn registry_has_15_active_products() {
+    fn registry_has_16_active_products() {
         let items = products();
-        assert_eq!(items.iter().filter(|p| p.active).count(), 15);
+        assert_eq!(items.iter().filter(|p| p.active).count(), 16);
     }
 
     #[test]
@@ -146,6 +155,18 @@ mod tests {
         assert_eq!(daily.url, "https://maia.usno.navy.mil/ser7/finals2000A.daily");
         assert_eq!(daily.schedule, Schedule::Every(Duration::from_secs(24 * 3600)));
         assert_eq!(daily.alias_name, None);
+    }
+
+    #[test]
+    fn obspm_c04_entry_present() {
+        let items = products();
+        let c04 = items.iter().find(|p| p.name == "c04_iau2000").expect("c04_iau2000 present");
+        assert_eq!(c04.category, "eop");
+        assert_eq!(c04.source, "obspm");
+        assert_eq!(c04.filename, "eopc04_IAU2000.62-now");
+        assert_eq!(c04.url, "https://hpiers.obspm.fr/iers/eop/eopc04/eopc04_IAU2000.62-now");
+        assert_eq!(c04.schedule, Schedule::Every(Duration::from_secs(24 * 3600)));
+        assert_eq!(c04.alias_name, None);
     }
 
     #[test]
