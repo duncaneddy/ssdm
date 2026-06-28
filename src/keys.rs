@@ -22,6 +22,7 @@ pub fn public_url(domain: &str, key: &str) -> String {
 mod tests {
     use super::*;
     use crate::products::Product;
+    use crate::schedule::Schedule;
     use std::time::Duration;
 
     fn c04() -> Product {
@@ -31,7 +32,7 @@ mod tests {
             filename: "EOP_C04_one_file_1962-now.txt".into(),
             content_type: "text/plain", active: true, alias_name: Some("c04"),
             info_url: None, cadence_label: None,
-            interval: Duration::from_secs(3600),
+            schedule: Schedule::Every(Duration::from_secs(3600)),
         }
     }
 
@@ -42,7 +43,7 @@ mod tests {
             filename: "finals.all.iau2000.txt".into(),
             content_type: "text/plain", active: true, alias_name: None,
             info_url: None, cadence_label: None,
-            interval: Duration::from_secs(3600),
+            schedule: Schedule::Every(Duration::from_secs(3600)),
         }
     }
 

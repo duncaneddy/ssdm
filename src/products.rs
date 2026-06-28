@@ -3,6 +3,8 @@
 use std::collections::HashSet;
 use std::time::Duration;
 
+use crate::schedule::{Schedule, Weekday};
+
 /// One mirrored file.
 pub struct Product {
     pub category: &'static str,    // e.g. "eop", "space_weather", "catalog"
@@ -15,7 +17,7 @@ pub struct Product {
     pub alias_name: Option<&'static str>, // also written under this stable path segment
     pub info_url: Option<&'static str>,   // human-readable docs page (display only)
     pub cadence_label: Option<&'static str>, // named publish schedule (display only)
-    pub interval: Duration,
+    pub schedule: Schedule,
 }
 
 /// CelesTrak GP groups mirrored as JSON (latest-only).
@@ -34,7 +36,7 @@ pub fn products() -> Vec<Product> {
             content_type: "text/plain", active: true, alias_name: None,
             info_url: Some("https://www.iers.org/IERS/EN/DataProducts/EarthOrientationData/eop.html"),
             cadence_label: None,
-            interval: Duration::from_secs(24 * 3600),
+            schedule: Schedule::Every(Duration::from_secs(24 * 3600)),
         },
         Product {
             category: "eop", source: "iers", name: "c04_20u24",
@@ -43,7 +45,37 @@ pub fn products() -> Vec<Product> {
             content_type: "text/plain", active: true, alias_name: Some("c04"),
             info_url: Some("https://www.iers.org/IERS/EN/DataProducts/EarthOrientationData/eop.html"),
             cadence_label: None,
-            interval: Duration::from_secs(7 * 24 * 3600),
+            schedule: Schedule::Every(Duration::from_secs(7 * 24 * 3600)),
+        },
+        Product {
+            category: "eop", source: "usno", name: "finals2000a_all",
+            url: "https://maia.usno.navy.mil/ser7/finals2000A.all".into(),
+            filename: "finals2000A.all".into(),
+            content_type: "text/plain", active: true, alias_name: None,
+            info_url: Some("https://maia.usno.navy.mil/ser7/readme"),
+            cadence_label: None,
+            schedule: Schedule::WeeklyAt {
+                weekday: Weekday::Thu,
+                time: Duration::from_secs(18 * 3600 + 15 * 60),
+            },
+        },
+        Product {
+            category: "eop", source: "usno", name: "finals2000a_daily",
+            url: "https://maia.usno.navy.mil/ser7/finals2000A.daily".into(),
+            filename: "finals2000A.daily".into(),
+            content_type: "text/plain", active: true, alias_name: None,
+            info_url: Some("https://maia.usno.navy.mil/ser7/readme"),
+            cadence_label: None,
+            schedule: Schedule::Every(Duration::from_secs(24 * 3600)),
+        },
+        Product {
+            category: "eop", source: "obspm", name: "c04_iau2000",
+            url: "https://hpiers.obspm.fr/iers/eop/eopc04/eopc04_IAU2000.62-now".into(),
+            filename: "eopc04_IAU2000.62-now".into(),
+            content_type: "text/plain", active: true, alias_name: None,
+            info_url: Some("https://hpiers.obspm.fr/iers/eop/eopc04/readme"),
+            cadence_label: None,
+            schedule: Schedule::Every(Duration::from_secs(24 * 3600)),
         },
         Product {
             category: "space_weather", source: "celestrak", name: "sw_all",
@@ -52,7 +84,7 @@ pub fn products() -> Vec<Product> {
             content_type: "text/plain", active: true, alias_name: None,
             info_url: Some("https://celestrak.org/SpaceData/"),
             cadence_label: None,
-            interval: Duration::from_secs(6 * 3600),
+            schedule: Schedule::Every(Duration::from_secs(6 * 3600)),
         },
     ];
 
@@ -64,7 +96,7 @@ pub fn products() -> Vec<Product> {
             content_type: "application/json", active: true, alias_name: None,
             info_url: Some("https://celestrak.org/NORAD/documentation/gp-data-formats.php"),
             cadence_label: None,
-            interval: Duration::from_secs(2 * 3600),
+            schedule: Schedule::Every(Duration::from_secs(2 * 3600)),
         });
     }
 
@@ -93,9 +125,48 @@ mod tests {
     use std::time::Duration;
 
     #[test]
-    fn registry_has_13_active_products() {
+    fn registry_has_16_active_products() {
         let items = products();
-        assert_eq!(items.iter().filter(|p| p.active).count(), 13);
+        assert_eq!(items.iter().filter(|p| p.active).count(), 16);
+    }
+
+    #[test]
+    fn usno_finals2000a_entries_present() {
+        let items = products();
+
+        let all = items.iter().find(|p| p.name == "finals2000a_all").expect("finals2000a_all present");
+        assert_eq!(all.category, "eop");
+        assert_eq!(all.source, "usno");
+        assert_eq!(all.filename, "finals2000A.all");
+        assert_eq!(all.url, "https://maia.usno.navy.mil/ser7/finals2000A.all");
+        assert_eq!(
+            all.schedule,
+            Schedule::WeeklyAt {
+                weekday: Weekday::Thu,
+                time: Duration::from_secs(18 * 3600 + 15 * 60),
+            }
+        );
+        assert_eq!(all.alias_name, None);
+
+        let daily = items.iter().find(|p| p.name == "finals2000a_daily").expect("finals2000a_daily present");
+        assert_eq!(daily.category, "eop");
+        assert_eq!(daily.source, "usno");
+        assert_eq!(daily.filename, "finals2000A.daily");
+        assert_eq!(daily.url, "https://maia.usno.navy.mil/ser7/finals2000A.daily");
+        assert_eq!(daily.schedule, Schedule::Every(Duration::from_secs(24 * 3600)));
+        assert_eq!(daily.alias_name, None);
+    }
+
+    #[test]
+    fn obspm_c04_entry_present() {
+        let items = products();
+        let c04 = items.iter().find(|p| p.name == "c04_iau2000").expect("c04_iau2000 present");
+        assert_eq!(c04.category, "eop");
+        assert_eq!(c04.source, "obspm");
+        assert_eq!(c04.filename, "eopc04_IAU2000.62-now");
+        assert_eq!(c04.url, "https://hpiers.obspm.fr/iers/eop/eopc04/eopc04_IAU2000.62-now");
+        assert_eq!(c04.schedule, Schedule::Every(Duration::from_secs(24 * 3600)));
+        assert_eq!(c04.alias_name, None);
     }
 
     #[test]
@@ -127,13 +198,13 @@ mod tests {
     }
 
     #[test]
-    fn products_have_expected_intervals() {
+    fn products_have_expected_schedules() {
         let items = products();
-        let get = |name: &str| items.iter().find(|p| p.name == name).unwrap().interval;
-        assert_eq!(get("finals_all"), Duration::from_secs(24 * 3600));
-        assert_eq!(get("c04_20u24"), Duration::from_secs(7 * 24 * 3600));
-        assert_eq!(get("sw_all"), Duration::from_secs(6 * 3600));
-        assert_eq!(get("starlink"), Duration::from_secs(2 * 3600));
+        let get = |name: &str| &items.iter().find(|p| p.name == name).unwrap().schedule;
+        assert_eq!(get("finals_all"), &Schedule::Every(Duration::from_secs(24 * 3600)));
+        assert_eq!(get("c04_20u24"), &Schedule::Every(Duration::from_secs(7 * 24 * 3600)));
+        assert_eq!(get("sw_all"), &Schedule::Every(Duration::from_secs(6 * 3600)));
+        assert_eq!(get("starlink"), &Schedule::Every(Duration::from_secs(2 * 3600)));
     }
 
     #[test]
@@ -142,11 +213,11 @@ mod tests {
             Product { category: "eop", source: "iers", name: "c04_a", url: "u".into(),
                 filename: "f".into(), content_type: "text/plain", active: true, alias_name: Some("c04"),
                 info_url: None, cadence_label: None,
-                interval: Duration::from_secs(3600) },
+                schedule: Schedule::Every(Duration::from_secs(3600)) },
             Product { category: "eop", source: "iers", name: "c04_b", url: "u".into(),
                 filename: "f".into(), content_type: "text/plain", active: true, alias_name: Some("c04"),
                 info_url: None, cadence_label: None,
-                interval: Duration::from_secs(3600) },
+                schedule: Schedule::Every(Duration::from_secs(3600)) },
         ];
         assert!(validate_registry(&dupes).is_err());
     }

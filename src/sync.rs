@@ -155,6 +155,7 @@ async fn persist_bytes<S: Store>(
 mod tests {
     use super::*;
     use crate::products::Product;
+    use crate::schedule::Schedule;
     use std::collections::HashMap;
     use std::sync::Mutex;
     use std::time::Duration;
@@ -193,7 +194,7 @@ mod tests {
             url: url.into(), filename: format!("{name}.json"),
             content_type: "application/json", active: true, alias_name: None,
             info_url: None, cadence_label: None,
-            interval: Duration::from_secs(3600),
+            schedule: Schedule::Every(Duration::from_secs(3600)),
         }
     }
 

@@ -2,6 +2,7 @@
 
 use crate::keys::{alias_key, object_key, public_url};
 use crate::products::Product;
+use crate::schedule::{Schedule, Weekday};
 
 /// Render the full `index.html`: a centered, self-contained page listing every
 /// product. Freshness/hash cells are filled client-side from `/status.json`.
@@ -113,7 +114,7 @@ fn esc_attr(s: &str) -> String {
 
 fn push_row(out: &mut String, p: &Product, key: &str, label: &str, url: &str) {
     let cls = if p.active { "" } else { " class=\"discontinued\"" };
-    let interval_ms = p.interval.as_millis();
+    let interval_ms = p.schedule.nominal_period().as_millis();
 
     let mut links = format!(
         " <a class=\"src\" href=\"{}\" title=\"Upstream source\">source</a>",
@@ -129,7 +130,7 @@ fn push_row(out: &mut String, p: &Product, key: &str, label: &str, url: &str) {
     let freq = p
         .cadence_label
         .map(|s| s.to_string())
-        .unwrap_or_else(|| humanize_interval(p.interval));
+        .unwrap_or_else(|| humanize_schedule(&p.schedule));
 
     out.push_str(&format!(
         "<tr data-key=\"{key}\" data-interval-ms=\"{interval_ms}\"{cls}>\
@@ -157,6 +158,8 @@ fn category_label(cat: &str) -> &str {
 fn provider_label(src: &str) -> &str {
     match src {
         "iers" => "IERS",
+        "usno" => "USNO",
+        "obspm" => "Paris Observatory",
         "celestrak" => "CelesTrak",
         other => other,
     }
@@ -227,6 +230,32 @@ fn humanize_interval(d: std::time::Duration) -> String {
     }
 }
 
+fn humanize_schedule(s: &Schedule) -> String {
+    match s {
+        Schedule::Every(d) => humanize_interval(*d),
+        Schedule::WeeklyAt { weekday, time } => {
+            format!("{} from {} UTC", weekday_plural(*weekday), fmt_time_of_day(*time))
+        }
+    }
+}
+
+fn weekday_plural(w: Weekday) -> &'static str {
+    match w {
+        Weekday::Mon => "Mondays",
+        Weekday::Tue => "Tuesdays",
+        Weekday::Wed => "Wednesdays",
+        Weekday::Thu => "Thursdays",
+        Weekday::Fri => "Fridays",
+        Weekday::Sat => "Saturdays",
+        Weekday::Sun => "Sundays",
+    }
+}
+
+fn fmt_time_of_day(d: std::time::Duration) -> String {
+    let total_min = d.as_secs() / 60;
+    format!("{:02}:{:02}", total_min / 60, total_min % 60)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,7 +270,7 @@ mod tests {
                 filename: "EOP_C04_one_file_1962-now.txt".into(),
                 content_type: "text/plain", active: true, alias_name: Some("c04"),
                 info_url: Some("https://iers.example/info"), cadence_label: None,
-                interval: Duration::from_secs(3600),
+                schedule: Schedule::Every(Duration::from_secs(3600)),
             },
             Product {
                 category: "eop", source: "iers", name: "c04_19u20",
@@ -249,7 +278,7 @@ mod tests {
                 filename: "EOP_C04_one_file_1962-now.txt".into(),
                 content_type: "text/plain", active: false, alias_name: None,
                 info_url: None, cadence_label: None,
-                interval: Duration::from_secs(3600),
+                schedule: Schedule::Every(Duration::from_secs(3600)),
             },
         ]
     }
@@ -385,5 +414,23 @@ mod tests {
         let html = render_index_html("example.org", &sample());
         assert!(html.contains("https://github.com/duncaneddy/ssdm"), "repo link");
         assert!(html.contains("https://github.com/duncaneddy/ssdm/issues/new"), "open-an-issue link");
+    }
+
+    #[test]
+    fn weekly_schedule_renders_weekday_and_time() {
+        let items = vec![Product {
+            category: "eop", source: "usno", name: "finals2000a_all",
+            url: "https://maia.usno.navy.mil/ser7/finals2000A.all".into(),
+            filename: "finals2000A.all".into(),
+            content_type: "text/plain", active: true, alias_name: None,
+            info_url: None, cadence_label: None,
+            schedule: Schedule::WeeklyAt {
+                weekday: Weekday::Thu,
+                time: std::time::Duration::from_secs(18 * 3600 + 15 * 60),
+            },
+        }];
+        let html = render_index_html("example.org", &items);
+        assert!(html.contains("Thursdays from 18:15 UTC"), "weekly frequency text");
+        assert!(html.contains("data-interval-ms=\"604800000\""), "weekly nominal period = 7d");
     }
 }

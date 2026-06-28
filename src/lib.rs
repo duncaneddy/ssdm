@@ -5,6 +5,7 @@ pub mod keys;
 pub mod local;
 pub mod page;
 pub mod products;
+pub mod schedule;
 pub mod ratelimit;
 pub mod retry;
 pub mod status;

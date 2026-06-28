@@ -8,13 +8,18 @@ use crate::config::Config;
 use crate::keys::object_key;
 use crate::products::Product;
 use crate::ratelimit::RateLimiter;
-use crate::status::{is_due, Status};
+use crate::status::Status;
 
 /// Indices of active products that are due to be fetched at `now_ms`.
 pub fn due_indices(all: &[Product], status: &Status, now_ms: u64) -> Vec<usize> {
     all.iter()
         .enumerate()
-        .filter(|(_, p)| p.active && is_due(status, &object_key(p), p.interval, now_ms))
+        .filter(|(_, p)| {
+            p.active && {
+                let la = status.get(&object_key(p)).map(|e| e.last_attempt);
+                p.schedule.is_due(la, now_ms)
+            }
+        })
         .map(|(i, _)| i)
         .collect()
 }
@@ -25,12 +30,8 @@ pub fn sleep_until_due_ms(all: &[Product], status: &Status, now_ms: u64, cap_ms:
     let mut soonest = cap_ms;
     for p in all.iter().filter(|p| p.active) {
         let key = object_key(p);
-        let interval_ms = p.interval.as_millis() as u64;
-        let remaining = match status.get(&key) {
-            None => 0,
-            Some(e) => interval_ms.saturating_sub(now_ms.saturating_sub(e.last_attempt)),
-        };
-        soonest = soonest.min(remaining);
+        let la = status.get(&key).map(|e| e.last_attempt);
+        soonest = soonest.min(p.schedule.remaining_ms(la, now_ms));
     }
     soonest
 }
