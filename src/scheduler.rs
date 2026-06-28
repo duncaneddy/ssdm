@@ -16,8 +16,10 @@ pub fn due_indices(all: &[Product], status: &Status, now_ms: u64) -> Vec<usize> 
         .enumerate()
         .filter(|(_, p)| {
             p.active && {
-                let la = status.get(&object_key(p)).map(|e| e.last_attempt);
-                p.schedule.is_due(la, now_ms)
+                let e = status.get(&object_key(p));
+                let la = e.map(|e| e.last_attempt);
+                let lc = e.map(|e| e.last_checked);
+                p.schedule.is_due(la, lc, now_ms)
             }
         })
         .map(|(i, _)| i)
@@ -30,8 +32,10 @@ pub fn sleep_until_due_ms(all: &[Product], status: &Status, now_ms: u64, cap_ms:
     let mut soonest = cap_ms;
     for p in all.iter().filter(|p| p.active) {
         let key = object_key(p);
-        let la = status.get(&key).map(|e| e.last_attempt);
-        soonest = soonest.min(p.schedule.remaining_ms(la, now_ms));
+        let e = status.get(&key);
+        let la = e.map(|e| e.last_attempt);
+        let lc = e.map(|e| e.last_checked);
+        soonest = soonest.min(p.schedule.remaining_ms(la, lc, now_ms));
     }
     soonest
 }
@@ -91,26 +95,29 @@ mod tests {
     use crate::products::products;
     use crate::status::{apply_update, Status};
 
+    // A realistic wall-clock instant (2023-11-14 ~22:13 UTC, a Tuesday): well past
+    // any weekly anchor, as `now_ms` always is in production.
+    const NOW: u64 = 1_700_000_000_000;
+
     #[test]
     fn everything_due_when_status_empty() {
         let all = products();
         let s = Status::new();
         let active = all.iter().filter(|p| p.active).count();
-        assert_eq!(due_indices(&all, &s, 1000).len(), active);
-        assert_eq!(sleep_until_due_ms(&all, &s, 1000, 3_600_000), 0);
+        assert_eq!(due_indices(&all, &s, NOW).len(), active);
+        assert_eq!(sleep_until_due_ms(&all, &s, NOW, 3_600_000), 0);
     }
 
     #[test]
     fn sleeps_until_soonest_interval() {
         let all = products();
         let mut s = Status::new();
-        let now = 1_000_000u64;
         for p in all.iter().filter(|p| p.active) {
-            apply_update(&mut s, &object_key(p), "h", 1, now);
+            apply_update(&mut s, &object_key(p), "h", 1, NOW);
         }
-        assert!(due_indices(&all, &s, now).is_empty(), "all just attempted => none due");
+        assert!(due_indices(&all, &s, NOW).is_empty(), "all just attempted => none due");
         // soonest cadence is the 2h CelesTrak group
-        let sleep = sleep_until_due_ms(&all, &s, now, 24 * 3_600_000);
+        let sleep = sleep_until_due_ms(&all, &s, NOW, 24 * 3_600_000);
         assert_eq!(sleep, 2 * 3_600_000);
     }
 
@@ -118,10 +125,48 @@ mod tests {
     fn sleep_is_capped() {
         let all = products();
         let mut s = Status::new();
-        let now = 1_000_000u64;
         for p in all.iter().filter(|p| p.active) {
-            apply_update(&mut s, &object_key(p), "h", 1, now);
+            apply_update(&mut s, &object_key(p), "h", 1, NOW);
         }
-        assert_eq!(sleep_until_due_ms(&all, &s, now, 60_000), 60_000, "clamped to cap");
+        assert_eq!(sleep_until_due_ms(&all, &s, NOW, 60_000), 60_000, "clamped to cap");
+    }
+
+    #[test]
+    fn weekly_failed_attempt_is_retried_via_last_checked() {
+        use crate::schedule::{Schedule, Weekday};
+        use crate::status::StatusEntry;
+        use std::time::Duration;
+
+        let weekly = Product {
+            category: "eop", source: "usno", name: "finals_test",
+            url: "https://h/finals".into(), filename: "finals.all".into(),
+            content_type: "text/plain", active: true, alias_name: None,
+            info_url: None, cadence_label: None,
+            schedule: Schedule::WeeklyAt {
+                weekday: Weekday::Thu,
+                time: Duration::from_secs(18 * 3600 + 15 * 60),
+            },
+        };
+        let all = vec![weekly];
+        let key = object_key(&all[0]);
+
+        // A fetch was attempted recently and FAILED: last_attempt is fresh (NOW),
+        // but the last successful download was over a week ago.
+        let mut s = Status::new();
+        s.insert(key, StatusEntry {
+            last_attempt: NOW,
+            last_checked: NOW - 8 * 86_400_000,
+            last_updated: NOW - 8 * 86_400_000,
+            hash: "h".into(),
+            size: 1,
+        });
+
+        // An hour after the failed attempt (the retry backoff), it must be due again.
+        let later = NOW + 3_600_000;
+        assert_eq!(
+            due_indices(&all, &s, later),
+            vec![0],
+            "a weekly product that only failed must be retried, not skipped for a week"
+        );
     }
 }
