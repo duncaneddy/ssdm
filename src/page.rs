@@ -48,11 +48,10 @@ background:transparent;border-radius:4px;padding:.05rem .4rem;font-size:.75rem;c
 .freq{{white-space:nowrap}}
 td.dotcell{{width:1rem;padding-right:0}}
 .dot{{display:inline-block;width:.6rem;height:.6rem;border-radius:50%;background:#bbb;vertical-align:middle}}
-tr.ok .dot{{background:#22c55e}} tr.ok .checked{{color:#16a34a}}
-tr.warn .dot{{background:#f59e0b}} tr.warn .checked{{color:#d97706}}
-tr.bad .dot{{background:#ef4444}} tr.bad .checked{{color:#dc2626}}
+.lvl0{{color:#16a34a}} .lvl1{{color:#d97706}} .lvl2{{color:#dc2626}}
+.dot.lvl0{{background:#22c55e}} .dot.lvl1{{background:#f59e0b}} .dot.lvl2{{background:#ef4444}}
 @media(prefers-color-scheme:dark){{
-tr.ok .checked{{color:#4ade80}} tr.warn .checked{{color:#fbbf24}} tr.bad .checked{{color:#f87171}}}}
+.lvl0{{color:#4ade80}} .lvl1{{color:#fbbf24}} .lvl2{{color:#f87171}}}}
 footer{{text-align:center;margin-top:2rem;color:#888;font-size:.8rem}}
 footer a{{color:inherit;text-decoration:underline}}
 </style>
@@ -87,19 +86,33 @@ function fmtSize(b){{
   return b.toFixed(1)+" "+u[i];
 }}
 fetch("/status.json").then(function(r){{return r.ok?r.json():{{}};}}).then(function(st){{
+  var now=Date.now();
   document.querySelectorAll("tr[data-key]").forEach(function(tr){{
     var e=st[tr.getAttribute("data-key")]; if(!e) return;
     var up=tr.querySelector(".updated"), ck=tr.querySelector(".checked"),
         hs=tr.querySelector(".hashval"), bt=tr.querySelector(".hash .copy"),
-        sz=tr.querySelector(".sizeval");
-    up.textContent=rel(e.last_updated); up.title=abs(e.last_updated);
-    ck.textContent=rel(e.last_checked); ck.title=abs(e.last_checked);
-    if(sz){{ sz.textContent=fmtSize(e.size); if(e.size) sz.title=e.size+" bytes"; }}
+        sz=tr.querySelector(".sizeval"), dot=tr.querySelector(".dot");
     var iv=parseFloat(tr.getAttribute("data-interval-ms"))||0;
-    if(e.last_checked && iv){{
-      var ratio=(Date.now()-e.last_checked)/iv;
-      tr.classList.add(ratio<1.25?"ok":(ratio<2.25?"warn":"bad"));
-    }}
+    // staleness level vs the product cadence: 0 green (<=1x), 1 amber (<=3x),
+    // 2 red (beyond), -1 unknown. Returns -1 when the timestamp or cadence is absent.
+    function lvl(ms){{ if(!ms||!iv) return -1; var r=(now-ms)/iv; return r<=1?0:(r<=3?1:2); }}
+    function paint(el,l){{ if(l>=0) el.classList.add("lvl"+l); }}
+
+    up.textContent=rel(e.last_updated); up.title=abs(e.last_updated);
+    // "Last checked" shows the most recent attempt (advances every cycle, success
+    // or failure); its color tracks the last SUCCESSFUL check, so a source that is
+    // attempted but failing reads e.g. "5m ago" in amber/red.
+    var attempt=e.last_attempt||e.last_checked;
+    ck.textContent=rel(attempt);
+    ck.title=(e.last_checked && e.last_checked!==attempt)
+      ? "attempted "+abs(attempt)+"; last success "+abs(e.last_checked)
+      : abs(attempt);
+    if(sz){{ sz.textContent=fmtSize(e.size); if(e.size) sz.title=e.size+" bytes"; }}
+
+    var c=lvl(e.last_checked), u=lvl(e.last_updated);
+    paint(ck,c); paint(up,u);
+    paint(dot,Math.max(c,u));  // dot = worse of connectivity and data freshness
+
     if(e.hash){{ hs.textContent=e.hash.slice(0,12)+"…"; bt.dataset.copy=e.hash; bt.hidden=false; }}
   }});
 }}).catch(function(){{}});
@@ -434,8 +447,34 @@ mod tests {
     #[test]
     fn js_color_thresholds_present() {
         let html = render_index_html("example.org", &sample());
-        assert!(html.contains("1.25"), "green/orange threshold");
-        assert!(html.contains("2.25"), "orange/red threshold");
+        // staleness levels keyed off the cadence: <=1x green, <=3x amber, else red
+        assert!(html.contains("r<=1?0:(r<=3?1:2)"), "1x/3x staleness thresholds");
+        assert!(html.contains(".lvl0"), "green level class");
+        assert!(html.contains(".lvl1"), "amber level class");
+        assert!(html.contains(".lvl2"), "red level class");
+    }
+
+    #[test]
+    fn last_checked_shows_attempt_time() {
+        // "Last checked" must reflect the most recent attempt (last_attempt), which
+        // advances every cycle even when a fetch fails or the content is unchanged.
+        let html = render_index_html("example.org", &sample());
+        assert!(html.contains("e.last_attempt"), "checked cell reads last_attempt");
+    }
+
+    #[test]
+    fn checked_color_tracks_last_success() {
+        // The checked cell's COLOR derives from last_checked (last successful
+        // download), so a failing source shows a recent attempt time in red/amber.
+        let html = render_index_html("example.org", &sample());
+        assert!(html.contains("c=lvl(e.last_checked)"), "checked color from last_checked");
+        assert!(html.contains("u=lvl(e.last_updated)"), "updated color from last_updated");
+    }
+
+    #[test]
+    fn status_dot_combines_checked_and_updated() {
+        let html = render_index_html("example.org", &sample());
+        assert!(html.contains("Math.max(c,u)"), "dot = worse of connectivity and freshness");
     }
 
     #[test]
