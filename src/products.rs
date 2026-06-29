@@ -84,7 +84,7 @@ pub fn products() -> Vec<Product> {
             content_type: "text/plain", active: true, alias_name: None,
             info_url: Some("https://celestrak.org/SpaceData/"),
             cadence_label: None,
-            schedule: Schedule::Every(Duration::from_secs(6 * 3600)),
+            schedule: Schedule::Every(Duration::from_secs(8 * 3600)),
         },
     ];
 
@@ -96,7 +96,7 @@ pub fn products() -> Vec<Product> {
             content_type: "application/json", active: true, alias_name: None,
             info_url: Some("https://celestrak.org/NORAD/documentation/gp-data-formats.php"),
             cadence_label: None,
-            schedule: Schedule::Every(Duration::from_secs(2 * 3600)),
+            schedule: Schedule::Every(Duration::from_secs(8 * 3600)),
         });
     }
 
@@ -203,8 +203,8 @@ mod tests {
         let get = |name: &str| &items.iter().find(|p| p.name == name).unwrap().schedule;
         assert_eq!(get("finals_all"), &Schedule::Every(Duration::from_secs(24 * 3600)));
         assert_eq!(get("c04_20u24"), &Schedule::Every(Duration::from_secs(7 * 24 * 3600)));
-        assert_eq!(get("sw_all"), &Schedule::Every(Duration::from_secs(6 * 3600)));
-        assert_eq!(get("starlink"), &Schedule::Every(Duration::from_secs(2 * 3600)));
+        assert_eq!(get("sw_all"), &Schedule::Every(Duration::from_secs(8 * 3600)));
+        assert_eq!(get("starlink"), &Schedule::Every(Duration::from_secs(8 * 3600)));
     }
 
     #[test]

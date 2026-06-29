@@ -116,9 +116,9 @@ mod tests {
             apply_update(&mut s, &object_key(p), "h", 1, NOW);
         }
         assert!(due_indices(&all, &s, NOW).is_empty(), "all just attempted => none due");
-        // soonest cadence is the 2h CelesTrak group
+        // soonest cadence is the 8h CelesTrak/space-weather groups
         let sleep = sleep_until_due_ms(&all, &s, NOW, 24 * 3_600_000);
-        assert_eq!(sleep, 2 * 3_600_000);
+        assert_eq!(sleep, 8 * 3_600_000);
     }
 
     #[test]
