@@ -58,11 +58,18 @@ pub async fn run_daemon(cfg: &Config) -> anyhow::Result<()> {
     // truncate an existing remote status.json before all products are synced.
     crate::sync::bootstrap_status(&store, &cfg.data_dir).await;
 
-    if cfg.run_on_start {
+    // Always run a startup pass so a container restart re-renders and re-uploads
+    // index.html, reflecting registry/schedule changes (run_sync uploads the page
+    // before any fetch). Pass no products in the normal case — the loop below
+    // owns due-based fetching, so this refresh costs no upstream requests. Only
+    // RUN_ON_START forces a full re-pull of every active product here.
+    let startup: Vec<&Product> = if cfg.run_on_start {
         info!("RUN_ON_START set — forcing a full sync");
-        let refs: Vec<&Product> = all.iter().filter(|p| p.active).collect();
-        crate::sync::run_sync(&all, &refs, &fetcher, &store, &mut rate, &cfg.data_dir, &cfg.site_domain, now_ms()).await;
-    }
+        all.iter().filter(|p| p.active).collect()
+    } else {
+        Vec::new()
+    };
+    crate::sync::run_sync(&all, &startup, &fetcher, &store, &mut rate, &cfg.data_dir, &cfg.site_domain, now_ms()).await;
 
     loop {
         let status = crate::local::load_status(&cfg.data_dir);

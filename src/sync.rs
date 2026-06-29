@@ -31,9 +31,12 @@ pub trait Store {
 const STATUS_KEY: &str = "status.json";
 const STATUS_CT: &str = "application/json";
 
-/// Long cache for data files and the page shell — they change rarely and the
-/// CDN should hold them.
+/// Long cache for data files — they change rarely and the CDN should hold them.
 const DATA_CACHE: &str = "public, max-age=3600";
+/// Short cache for index.html: it is re-rendered on every restart and sync pass
+/// to reflect registry/schedule changes, so a long TTL would leave returning
+/// visitors on a stale page for up to an hour after a deploy.
+const INDEX_CACHE: &str = "public, max-age=60";
 /// Short cache for status.json: it changes every pass and the landing page reads
 /// it on each load for freshness, so a long TTL would show stale "last updated".
 const STATUS_CACHE: &str = "public, max-age=60";
@@ -90,7 +93,7 @@ pub async fn run_sync<F: Fetcher, S: Store>(
 
     // Index page (from the full registry), best-effort.
     let html = render_index_html(site_domain, all);
-    if let Err(e) = store.put(INDEX_KEY, html.into_bytes(), INDEX_CT, DATA_CACHE).await {
+    if let Err(e) = store.put(INDEX_KEY, html.into_bytes(), INDEX_CT, INDEX_CACHE).await {
         warn!("index.html upload failed: {e}");
     }
 
@@ -254,6 +257,24 @@ mod tests {
             store.puts.lock().unwrap().iter().filter(|k| k.as_str() == "status.json").count() >= 2,
             "status.json must be uploaded to R2 after each run"
         );
+    }
+
+    #[tokio::test]
+    async fn empty_process_still_refreshes_index() {
+        // The daemon's startup pass relies on this: with nothing due to fetch,
+        // run_sync must still re-render and upload index.html so a restart picks
+        // up registry/schedule changes without fetching any product.
+        let dir = tempfile::tempdir().unwrap();
+        let all = vec![product("active", "https://h/active")];
+        let fetcher = FakeFetcher { out: HashMap::new() };
+        let store = FakeStore::default();
+        let mut rate = RateLimiter::new(Duration::ZERO, Duration::ZERO);
+
+        let sum = run_sync(&all, &[], &fetcher, &store, &mut rate, dir.path(), "example.org", 1000).await;
+        assert_eq!((sum.checked, sum.changed, sum.failed), (0, 0, 0), "nothing fetched");
+        let puts = store.puts.lock().unwrap();
+        assert!(puts.contains(&"index.html".to_string()), "index.html refreshed with empty process list");
+        assert!(!puts.iter().any(|k| k.contains("active/latest")), "no product data uploaded");
     }
 
     #[tokio::test]
