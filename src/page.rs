@@ -30,22 +30,30 @@ details{{margin:1rem 0;border:1px solid rgba(127,127,127,.25);border-radius:8px;
 summary{{font-size:1.15rem;font-weight:600;cursor:pointer;padding:.3rem 0}}
 h2.prov{{font-size:.95rem;font-weight:600;color:#666;margin:1rem 0 .3rem}}
 @media(prefers-color-scheme:dark){{h2.prov{{color:#aaa}}}}
-table{{border-collapse:collapse;width:100%;font-size:.88rem}}
+table{{border-collapse:collapse;width:100%;font-size:.88rem;table-layout:fixed}}
 th,td{{padding:.5rem .6rem;text-align:left;border-bottom:1px solid rgba(127,127,127,.25);
 vertical-align:top}}
 th{{font-weight:600;white-space:nowrap}}
+/* Shared fixed column widths so every provider table lines up. The Product and
+   Mirror URL columns carry no explicit width and split the remaining space. */
+col.c-dot{{width:1.5rem}}
+col.c-freq{{width:11rem}}
+col.c-size{{width:5rem}}
+col.c-upd{{width:6.5rem}}
+col.c-chk{{width:6.5rem}}
+col.c-hash{{width:10rem}}
 tr.discontinued td{{opacity:.55}}
 a{{color:#2563eb;text-decoration:none}}
 a:hover{{text-decoration:underline}}
 .tw{{overflow-x:auto}}
-td.dl a{{white-space:nowrap}}
-.hash{{font-family:ui-monospace,monospace;font-size:.82rem}}
+td.prod,td.dl a{{overflow-wrap:anywhere}}
+.hash{{font-family:ui-monospace,monospace;font-size:.82rem;overflow-wrap:anywhere}}
 .copy{{margin-left:.4rem;cursor:pointer;border:1px solid rgba(127,127,127,.4);
 background:transparent;border-radius:4px;padding:.05rem .4rem;font-size:.75rem;color:inherit}}
 .copy:hover{{background:rgba(127,127,127,.15)}}
 .rel{{white-space:nowrap}}
 .links a{{font-size:.78rem;margin-left:.35rem}}
-.freq{{white-space:nowrap}}
+.freq{{overflow-wrap:anywhere}}
 td.dotcell{{width:1rem;padding-right:0}}
 .dot{{display:inline-block;width:.6rem;height:.6rem;border-radius:50%;background:#bbb;vertical-align:middle}}
 .lvl0{{color:#16a34a}} .lvl1{{color:#d97706}} .lvl2{{color:#dc2626}}
@@ -134,10 +142,14 @@ fn esc_attr(s: &str) -> String {
     s.replace('&', "&amp;").replace('"', "&quot;").replace('<', "&lt;")
 }
 
-fn push_row(out: &mut String, p: &Product, key: &str, label: &str, url: &str) {
+fn push_row(out: &mut String, p: &Product, domain: &str, key: &str, label: &str, path: &str) {
     let cls = if p.active { "" } else { " class=\"discontinued\"" };
     let interval_ms = p.schedule.nominal_period().as_millis();
-    let url_attr = esc_attr(url);
+    // Visible link text is the host-relative path; href/title and the copy button
+    // carry the full URL, which is always public_url(domain, path).
+    let url = public_url(domain, path);
+    let url_attr = esc_attr(&url);
+    let path_display = format!("/{path}");
 
     let mut links = format!(
         " <a class=\"src\" href=\"{}\" title=\"Upstream source\">source</a>",
@@ -158,9 +170,9 @@ fn push_row(out: &mut String, p: &Product, key: &str, label: &str, url: &str) {
     out.push_str(&format!(
         "<tr data-key=\"{key}\" data-interval-ms=\"{interval_ms}\"{cls}>\
 <td class=\"dotcell\"><span class=\"dot\"></span></td>\
-<td>{label}<span class=\"links\">{links}</span></td>\
+<td class=\"prod\">{label}<span class=\"links\">{links}</span></td>\
 <td class=\"freq\">{freq}</td>\
-<td class=\"dl\"><a href=\"{url}\">{url}</a>\
+<td class=\"dl\"><a href=\"{url}\" title=\"{url_attr}\">{path_display}</a>\
 <button class=\"copy\" data-copy=\"{url_attr}\">copy</button></td>\
 <td class=\"size\"><span class=\"sizeval\">\u{2014}</span></td>\
 <td class=\"rel updated\">\u{2014}</td>\
@@ -217,18 +229,19 @@ fn render_sections(domain: &str, items: &[Product]) -> String {
         for prov in provs {
             out.push_str(&format!("<h2 class=\"prov\">{}</h2>\n", provider_label(prov)));
             out.push_str(
-                "<div class=\"tw\"><table>\n<thead><tr>\
+                "<div class=\"tw\"><table>\n<colgroup>\
+<col class=\"c-dot\"><col class=\"c-prod\"><col class=\"c-freq\"><col class=\"c-url\">\
+<col class=\"c-size\"><col class=\"c-upd\"><col class=\"c-chk\"><col class=\"c-hash\">\
+</colgroup>\n<thead><tr>\
 <th class=\"dh\"></th><th>Product</th><th>Frequency</th><th>Mirror URL</th><th>Size</th><th>Last updated</th><th>Last checked</th><th>Hash (md5)</th>\
 </tr></thead>\n<tbody>\n",
             );
             for p in items.iter().filter(|p| p.category == cat && p.source == prov) {
                 let key = object_key(p);
-                let label = format!("{}/{}/{}", p.category, p.source, p.name);
-                push_row(&mut out, p, &key, &label, &public_url(domain, &key));
+                push_row(&mut out, p, domain, &key, &p.filename, &key);
                 if let Some(akey) = alias_key(p) {
-                    let alias = p.alias_name.unwrap_or("");
-                    let alias_label = format!("{}/{}/{} (alias)", p.category, p.source, alias);
-                    push_row(&mut out, p, &key, &alias_label, &public_url(domain, &akey));
+                    let alias_label = format!("{} (alias)", p.filename);
+                    push_row(&mut out, p, domain, &key, &alias_label, &akey);
                 }
             }
             out.push_str("</tbody>\n</table></div>\n");
@@ -382,6 +395,44 @@ mod tests {
         assert!(html.contains(
             "data-copy=\"https://example.org/eop/iers/c04_20u24/latest/EOP_C04_one_file_1962-now.txt\""
         ));
+    }
+
+    #[test]
+    fn product_cell_shows_filename() {
+        let html = render_index_html("example.org", &sample());
+        // The Product column displays the true filename, not category/source/name.
+        assert!(html.contains(">EOP_C04_one_file_1962-now.txt<"), "filename shown as product label");
+        assert!(!html.contains(">eop/iers/c04_20u24<"), "category/source/name no longer the label");
+    }
+
+    #[test]
+    fn alias_label_marks_filename() {
+        let html = render_index_html("example.org", &sample());
+        assert!(html.contains("EOP_C04_one_file_1962-now.txt (alias)"), "alias row labelled by filename");
+    }
+
+    #[test]
+    fn mirror_url_link_text_is_path_only() {
+        let html = render_index_html("example.org", &sample());
+        // Link text is the host-relative path; the domain is dropped from the visible text.
+        assert!(html.contains(">/eop/iers/c04_20u24/latest/EOP_C04_one_file_1962-now.txt<"),
+            "link shows leading-slash path");
+        // ...but the copy button and href still carry the full URL.
+        assert!(html.contains(
+            "data-copy=\"https://example.org/eop/iers/c04_20u24/latest/EOP_C04_one_file_1962-now.txt\""
+        ), "copy button retains full URL");
+        assert!(html.contains(
+            "href=\"https://example.org/eop/iers/c04_20u24/latest/EOP_C04_one_file_1962-now.txt\""
+        ), "href retains full URL");
+    }
+
+    #[test]
+    fn tables_use_fixed_layout_colgroup() {
+        let html = render_index_html("example.org", &sample());
+        // Consistent column widths across sections rely on table-layout:fixed + a shared colgroup.
+        assert!(html.contains("table-layout:fixed"), "fixed table layout");
+        assert!(html.contains("<colgroup>"), "shared colgroup defines column widths");
+        assert!(html.contains("class=\"c-freq\""), "named columns for consistent widths");
     }
 
     #[test]
