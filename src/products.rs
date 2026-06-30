@@ -69,9 +69,9 @@ pub fn products() -> Vec<Product> {
             schedule: Schedule::Every(Duration::from_secs(24 * 3600)),
         },
         Product {
-            category: "eop", source: "obspm", name: "c04_iau2000",
-            url: "https://hpiers.obspm.fr/iers/eop/eopc04/eopc04_IAU2000.62-now".into(),
-            filename: "eopc04_IAU2000.62-now".into(),
+            category: "eop", source: "obspm", name: "c04_1962now",
+            url: "https://hpiers.obspm.fr/iers/eop/eopc04/eopc04.1962-now".into(),
+            filename: "eopc04.1962-now".into(),
             content_type: "text/plain", active: true, alias_name: None,
             info_url: Some("https://hpiers.obspm.fr/iers/eop/eopc04/readme"),
             cadence_label: None,
@@ -160,11 +160,11 @@ mod tests {
     #[test]
     fn obspm_c04_entry_present() {
         let items = products();
-        let c04 = items.iter().find(|p| p.name == "c04_iau2000").expect("c04_iau2000 present");
+        let c04 = items.iter().find(|p| p.name == "c04_1962now").expect("c04_1962now present");
         assert_eq!(c04.category, "eop");
         assert_eq!(c04.source, "obspm");
-        assert_eq!(c04.filename, "eopc04_IAU2000.62-now");
-        assert_eq!(c04.url, "https://hpiers.obspm.fr/iers/eop/eopc04/eopc04_IAU2000.62-now");
+        assert_eq!(c04.filename, "eopc04.1962-now");
+        assert_eq!(c04.url, "https://hpiers.obspm.fr/iers/eop/eopc04/eopc04.1962-now");
         assert_eq!(c04.schedule, Schedule::Every(Duration::from_secs(24 * 3600)));
         assert_eq!(c04.alias_name, None);
     }
