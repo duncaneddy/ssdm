@@ -76,7 +76,7 @@ computations. Developed and maintained for use with
 <a href="https://github.com/duncaneddy/brahe">brahe</a> to provide redundancy in parameter
 sources. Each file refreshes on its own schedule
 (from every few hours to weekly) and are served at stable URLs of the form
-<code>/&lt;category&gt;/&lt;source&gt;/&lt;name&gt;/latest/&lt;filename&gt;</code>.</p>
+<code>{domain}/&lt;category&gt;/&lt;source&gt;/&lt;name&gt;/latest/&lt;filename&gt;</code>.</p>
 </header>
 {sections}<footer>Source on <a href="https://github.com/duncaneddy/ssdm">GitHub</a> — found a bug or have a suggestion?
 <a href="https://github.com/duncaneddy/ssdm/issues/new">Open an issue</a>.</footer>
@@ -347,6 +347,13 @@ mod tests {
         // carry the PRIMARY product's key or its freshness/hash never resolve.
         assert!(!html.contains("data-key=\"eop/iers/c04/latest/"));
         assert!(html.contains("data-key=\"eop/iers/c04_20u24/latest/EOP_C04_one_file_1962-now.txt\""));
+    }
+
+    #[test]
+    fn header_url_form_includes_domain() {
+        let html = render_index_html("example.org", &sample());
+        // The URL form in the header is prefixed with the site domain.
+        assert!(html.contains("<code>example.org/&lt;category&gt;/&lt;source&gt;/&lt;name&gt;/latest/&lt;filename&gt;</code>"));
     }
 
     #[test]
