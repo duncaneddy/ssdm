@@ -30,7 +30,7 @@ details{{margin:1rem 0;border:1px solid rgba(127,127,127,.25);border-radius:8px;
 summary{{font-size:1.15rem;font-weight:600;cursor:pointer;padding:.3rem 0}}
 h2.prov{{font-size:.95rem;font-weight:600;color:#666;margin:1rem 0 .3rem}}
 @media(prefers-color-scheme:dark){{h2.prov{{color:#aaa}}}}
-table{{border-collapse:collapse;width:100%;font-size:.88rem;table-layout:fixed}}
+table{{border-collapse:collapse;width:100%;min-width:64rem;font-size:.88rem;table-layout:fixed}}
 th,td{{padding:.5rem .6rem;text-align:left;border-bottom:1px solid rgba(127,127,127,.25);
 vertical-align:top}}
 th{{font-weight:600;white-space:nowrap}}
@@ -62,6 +62,10 @@ td.dotcell{{width:1rem;padding-right:0}}
 .lvl0{{color:#4ade80}} .lvl1{{color:#fbbf24}} .lvl2{{color:#f87171}}}}
 footer{{text-align:center;margin-top:2rem;color:#888;font-size:.8rem}}
 footer a{{color:inherit;text-decoration:underline}}
+@media(max-width:30rem){{
+body{{padding:1.5rem .75rem 3rem}}
+h1{{font-size:1.35rem}}
+details{{padding:.5rem .6rem}}}}
 </style>
 </head>
 <body>
