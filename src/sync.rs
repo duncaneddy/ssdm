@@ -195,7 +195,7 @@ mod tests {
         Product {
             category: "catalog", source: "celestrak", name: Box::leak(name.to_string().into_boxed_str()),
             url: url.into(), filename: format!("{name}.json"),
-            content_type: "application/json", active: true, alias_name: None,
+            content_type: "application/json", availability: crate::products::Availability::Active, alias_name: None,
             info_url: None, cadence_label: None,
             schedule: Schedule::Every(Duration::from_secs(3600)),
         }

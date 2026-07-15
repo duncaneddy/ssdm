@@ -20,7 +20,7 @@ pub enum Command {
     Daemon,
     /// Run one sync pass and exit.
     Sync {
-        /// Force all active products regardless of due-ness.
+        /// Force every fetched product regardless of due-ness.
         #[arg(long)]
         all: bool,
         /// Force a specific product by registry name (repeatable).
@@ -30,7 +30,9 @@ pub enum Command {
 }
 
 /// Select products to force-sync by name, matching against the FULL registry
-/// (active or inactive — forcing a frozen product by name is a valid dev action).
+/// regardless of availability — forcing a frozen or disabled product by name is
+/// a valid dev action (e.g. re-testing CelesTrak without redeploying). A name
+/// may match several products when a dataset spans multiple files.
 /// Errors if any name matches no product at all.
 fn select_products<'a>(items: &'a [Product], names: &[String]) -> anyhow::Result<Vec<&'a Product>> {
     let unknown: Vec<&str> = names
@@ -58,7 +60,7 @@ pub async fn run() -> anyhow::Result<()> {
         Command::Daemon => crate::scheduler::run_daemon(&cfg).await,
         Command::Sync { all, product } => {
             let items = products();
-            let fetcher = crate::fetch::HttpFetcher::new(std::time::Duration::from_secs(20), &cfg.site_domain)?;
+            let fetcher = crate::fetch::HttpFetcher::new(&cfg.site_domain)?;
             let store = crate::store::R2Store::new(&cfg)?;
             let mut rate = RateLimiter::new(cfg.host_min_interval, cfg.stagger_jitter);
             let now = crate::scheduler::now_ms();
@@ -70,7 +72,7 @@ pub async fn run() -> anyhow::Result<()> {
             let process: Vec<&Product> = if !product.is_empty() {
                 select_products(&items, &product)?
             } else if all {
-                items.iter().filter(|p| p.active).collect()
+                items.iter().filter(|p| p.availability.is_fetched()).collect()
             } else {
                 let status = crate::local::load_status(&cfg.data_dir);
                 crate::scheduler::due_indices(&items, &status, now)
@@ -92,33 +94,45 @@ pub async fn run() -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::products::Availability;
     use crate::schedule::Schedule;
     use clap::Parser;
     use std::time::Duration;
 
-    fn test_product(name: &'static str, active: bool) -> Product {
+    fn test_product(name: &'static str, availability: Availability) -> Product {
         Product {
             category: "catalog", source: "celestrak", name,
             url: format!("https://h/{name}"), filename: format!("{name}.json"),
-            content_type: "application/json", active, alias_name: None,
+            content_type: "application/json", availability, alias_name: None,
             info_url: None, cadence_label: None,
             schedule: Schedule::Every(Duration::from_secs(3600)),
         }
     }
 
     #[test]
-    fn select_products_includes_inactive_when_named() {
-        let items = vec![test_product("starlink", true), test_product("frozen", false)];
-        let names = vec!["frozen".to_string()];
-        let selected = select_products(&items, &names).unwrap();
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].name, "frozen");
-        assert!(!selected[0].active, "inactive product is force-selected by name");
+    fn select_products_includes_unfetched_when_named() {
+        let items = vec![
+            test_product("starlink", Availability::Active),
+            test_product("frozen", Availability::Frozen),
+            test_product("disabled", Availability::Disabled),
+        ];
+        for name in ["frozen", "disabled"] {
+            let selected = select_products(&items, &[name.to_string()]).unwrap();
+            assert_eq!(selected.len(), 1);
+            assert_eq!(selected[0].name, name);
+            assert!(
+                !selected[0].availability.is_fetched(),
+                "{name} is force-selected by name despite not being fetched on schedule"
+            );
+        }
     }
 
     #[test]
     fn select_products_rejects_unknown_name() {
-        let items = vec![test_product("starlink", true), test_product("frozen", false)];
+        let items = vec![
+            test_product("starlink", Availability::Active),
+            test_product("frozen", Availability::Frozen),
+        ];
         let names = vec!["frozen".to_string(), "nope".to_string()];
         let err = match select_products(&items, &names) {
             Ok(_) => panic!("expected error for unknown name"),

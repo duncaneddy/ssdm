@@ -48,17 +48,33 @@ where
     Err(last_err)
 }
 
+/// Fail an attempt that goes this long without delivering any bytes. This, not
+/// the total deadline, is what bounds a dead or stalled upstream.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Absolute ceiling for one attempt. Must exceed the slowest product's honest
+/// transfer time: the Hipparcos main catalog is ~53 MB and takes ~82s from CDS,
+/// so a total timeout sized for the small EOP files would fail it every time.
+const TOTAL_TIMEOUT: Duration = Duration::from_secs(600);
+
 pub struct HttpFetcher {
     client: reqwest::Client,
 }
 
 impl HttpFetcher {
-    pub fn new(timeout: Duration, site_domain: &str) -> Result<Self> {
+    pub fn new(site_domain: &str) -> Result<Self> {
+        Self::with_timeouts(site_domain, READ_TIMEOUT, TOTAL_TIMEOUT)
+    }
+
+    /// Construct with explicit timeouts. Production uses `new`; tests use this to
+    /// exercise the timeout policy on a sub-second scale.
+    fn with_timeouts(site_domain: &str, read: Duration, total: Duration) -> Result<Self> {
         // Identify ourselves to upstreams with a contact URL (the public site).
         let user_agent = format!("ssdm-mirror/1.0 (+https://{site_domain})");
         let client = reqwest::Client::builder()
             .user_agent(user_agent)
-            .timeout(timeout)
+            .read_timeout(read)
+            .timeout(total)
             .build()?;
         Ok(Self { client })
     }
@@ -129,6 +145,85 @@ mod tests {
         .await;
         assert!(res.is_err());
         assert_eq!(calls.get(), crate::retry::MAX_ATTEMPTS);
+    }
+
+    /// Serve one HTTP response whose body is dribbled out in `chunks` pieces,
+    /// `gap` apart, then hold the connection open. Returns the bound URL.
+    ///
+    /// This models the two upstreams we care about: one that is slow but always
+    /// making progress (CDS delivering 53 MB over ~82s), and one that accepts a
+    /// connection and then stalls forever.
+    async fn dribbling_server(chunks: usize, gap: Duration) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            use tokio::io::AsyncWriteExt;
+            let _ = sock
+                .write_all(format!("HTTP/1.1 200 OK\r\nContent-Length: {chunks}\r\n\r\n").as_bytes())
+                .await;
+            let _ = sock.flush().await;
+            for _ in 0..chunks {
+                tokio::time::sleep(gap).await;
+                if sock.write_all(b"x").await.is_err() {
+                    return;
+                }
+                let _ = sock.flush().await;
+            }
+            // Hold the socket open so a client that wants more bytes must time out.
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        });
+        format!("http://{addr}/slow")
+    }
+
+    // Real timers: reqwest's timeouts are driven by the real clock, so these
+    // tests use short (sub-second) budgets rather than tokio's paused time.
+
+    #[tokio::test]
+    async fn slow_but_progressing_transfer_is_not_killed() {
+        // 10 chunks × 50ms = ~500ms total, far beyond the 150ms inactivity
+        // budget, but no single gap exceeds it. This is the property that makes
+        // the 53 MB Hipparcos catalog fetchable; a total-deadline-only policy
+        // (the old 20s `.timeout()`) fails exactly this case.
+        let url = dribbling_server(10, Duration::from_millis(50)).await;
+        let f = HttpFetcher::with_timeouts(
+            "example.org",
+            Duration::from_millis(150),
+            Duration::from_secs(30),
+        )
+        .unwrap();
+        let bytes = match f.get_once(&url).await {
+            Ok(b) => b,
+            Err(FetchError::Retryable(e)) | Err(FetchError::Fatal(e)) => {
+                panic!("a steadily-progressing transfer must not time out: {e}")
+            }
+        };
+        assert_eq!(bytes.len(), 10);
+    }
+
+    #[tokio::test]
+    async fn stalled_transfer_fails_on_the_inactivity_budget() {
+        // Headers arrive, then the body never does. The read timeout must fire
+        // well before the total deadline — that is what keeps a dead upstream
+        // from occupying the sync pass for the full ceiling.
+        let url = dribbling_server(1, Duration::from_secs(60)).await;
+        let f = HttpFetcher::with_timeouts(
+            "example.org",
+            Duration::from_millis(150),
+            Duration::from_secs(30),
+        )
+        .unwrap();
+        let start = std::time::Instant::now();
+        let err = match f.get_once(&url).await {
+            Ok(b) => panic!("expected a timeout, got {} bytes", b.len()),
+            Err(FetchError::Retryable(e)) => e,
+            Err(FetchError::Fatal(e)) => panic!("a stall is transient, not fatal: {e}"),
+        };
+        assert!(
+            start.elapsed() < Duration::from_secs(5),
+            "must fail on the inactivity budget, not the 30s ceiling: took {:?} ({err})",
+            start.elapsed()
+        );
     }
 
     #[tokio::test(start_paused = true)]

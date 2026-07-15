@@ -12,6 +12,16 @@ use crate::sync::Store;
 
 const SIGN_TTL: Duration = Duration::from_secs(300);
 
+/// Bound a dead endpoint at connection setup rather than via the total deadline.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Fail if the store goes this long without sending any response bytes.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+/// Absolute ceiling for one request. This covers the *body upload*, so it must
+/// accommodate the largest product on a slow uplink: hip_main.dat is ~53 MB, and
+/// a 30s ceiling silently made a successful PUT contingent on having ~15 Mbit/s
+/// of upstream bandwidth.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+
 pub struct R2Store {
     bucket: Bucket,
     creds: Credentials,
@@ -36,7 +46,9 @@ impl R2Store {
             .map_err(|e| anyhow!("bucket init: {e}"))?;
         let creds = Credentials::new(cfg.bucket_access_key_id.clone(), cfg.bucket_secret_access_key.clone());
         let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(30))
+            .connect_timeout(CONNECT_TIMEOUT)
+            .read_timeout(READ_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
             .build()?;
         Ok(Self { bucket, creds, client })
     }

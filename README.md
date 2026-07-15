@@ -1,8 +1,8 @@
 # SSDM — Simple Space Data Mirror
 
-A self-hosted service that mirrors Earth Orientation Parameter (EOP) and
-space-weather data files (plus selected CelesTrak GP groups) into a public
-Cloudflare R2 bucket served at https://yourgreatdomain.com, for use with
+A self-hosted service that mirrors Earth Orientation Parameter (EOP) files and
+star catalogs (FK5, Hipparcos) into a public Cloudflare R2 bucket served at
+https://yourgreatdomain.com, for use with
 [Brahe](https://github.com/duncaneddy/brahe).
 
 ## How it works
@@ -14,12 +14,37 @@ to a public R2 bucket under `/<category>/<source>/<name>/latest/<filename>`. A
 public R2 custom domain serves the bucket directly via Cloudflare's CDN; the
 daemon is only ever in the write path.
 
-Each product has its own cadence (e.g. CelesTrak groups every 2h, daily EOP/space
-weather, slower realizations weekly). The daemon sleeps until the soonest product
-is due, syncs the due set sequentially, and persists `status.json` after each
-product (locally and to R2). Per-host rate limiting and a small stagger keep us
-polite to upstreams; failed downloads retry briefly in-run and otherwise wait for
-the product's next interval.
+Each product has its own cadence (daily EOP, weekly realizations, monthly
+availability checks for the fixed star catalogs). The daemon sleeps until the
+soonest product is due, syncs the due set sequentially, and persists
+`status.json` after each product (locally and to R2). Per-host rate limiting and
+a small stagger keep us polite to upstreams; failed downloads retry briefly
+in-run and otherwise wait for the product's next interval.
+
+## Product availability
+
+Every product declares an `Availability` (`src/products.rs`):
+
+| State | Fetched | Listed on the landing page | Object in the bucket |
+|---|---|---|---|
+| `Active` | yes | yes | kept current |
+| `Frozen` | no | yes, greyed out | frozen at its last value |
+| `Disabled` | no | no | kept, but unadvertised |
+
+`Frozen` is for a superseded realization whose versioned path must keep
+resolving for existing consumers. `Disabled` is for an upstream that is broken:
+the product stays in the registry so it can be restored by flipping one field.
+
+**CelesTrak is currently `Disabled`** — as of 2026-07-15, celestrak.org
+connection-times-out for both the GP groups and the space-weather file. All 11
+products remain in `src/products.rs`; set the `CELESTRAK` constant back to
+`Availability::Active` to resume the whole provider in one edit. To test it
+before committing to that, force a fetch by name — this works regardless of
+availability:
+
+```bash
+cargo run -- sync --product starlink
+```
 
 ## Local development
 
@@ -97,12 +122,21 @@ served at https://yourgreatdomain.com. Only do this to retire the service.
 
 Edit `src/products.rs`:
 
+- **Add a product:** add a `Product { … }` entry to `products()`. A dataset that
+  spans several files (e.g. a catalog plus its ReadMe) shares one `name`; the
+  object key includes the filename, so they do not collide.
 - **Add a CelesTrak group:** add its slug to `CELESTRAK_GROUPS`.
-- **Add a product:** add a `Product { … }` entry to `products()`.
 - **New C04 realization (e.g. `21u25`):** add `c04_21u25` with
-  `active: true, alias_name: Some("c04")`, and set the old `c04_20u24` to
-  `active: false, alias_name: None`. The old versioned path freezes (stays
-  served); the `c04` alias follows the new realization.
+  `availability: Availability::Active, alias_name: Some("c04")`, and set the old
+  `c04_20u24` to `availability: Availability::Frozen, alias_name: None`. The old
+  versioned path freezes (stays served and listed); the `c04` alias follows the
+  new realization.
+- **Pause a broken upstream:** set its products to `Availability::Disabled`.
 
-Run `cargo test` (the registry validation test enforces one active product per
+Run `cargo test` (the registry validation test enforces one fetched product per
 alias) and redeploy.
+
+Note that upstream fetches are bounded by an inactivity timeout rather than a
+total deadline (`src/fetch.rs`), so a large-but-slow product is fine while a
+dead host still fails fast. The largest product today (Hipparcos `hip_main.dat`,
+~53 MB) takes ~80s to download.

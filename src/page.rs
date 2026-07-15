@@ -1,7 +1,7 @@
 //! Static landing page generated from the product registry.
 
 use crate::keys::{alias_key, object_key, public_url};
-use crate::products::Product;
+use crate::products::{Availability, Product};
 use crate::schedule::{Schedule, Weekday};
 
 /// Render the full `index.html`: a centered, self-contained page listing every
@@ -75,7 +75,7 @@ details{{padding:.5rem .6rem}}}}
 computations. Developed and maintained for use with
 <a href="https://github.com/duncaneddy/brahe">brahe</a> to provide redundancy in parameter
 sources. Each file refreshes on its own schedule
-(from every few hours to weekly) and are served at stable URLs of the form
+(from daily for Earth orientation to monthly for the fixed star catalogs) and are served at stable URLs of the form
 <code>{domain}/&lt;category&gt;/&lt;source&gt;/&lt;name&gt;/latest/&lt;filename&gt;</code>.</p>
 </header>
 {sections}<footer>Source on <a href="https://github.com/duncaneddy/ssdm">GitHub</a> — found a bug or have a suggestion?
@@ -147,7 +147,7 @@ fn esc_attr(s: &str) -> String {
 }
 
 fn push_row(out: &mut String, p: &Product, domain: &str, key: &str, label: &str, path: &str) {
-    let cls = if p.active { "" } else { " class=\"discontinued\"" };
+    let cls = if p.availability == Availability::Frozen { " class=\"discontinued\"" } else { "" };
     let interval_ms = p.schedule.nominal_period().as_millis();
     // Visible link text is the host-relative path; href/title and the copy button
     // carry the full URL, which is always public_url(domain, path).
@@ -192,6 +192,7 @@ fn category_label(cat: &str) -> &str {
         "eop" => "Earth Orientation Parameters",
         "space_weather" => "Space Weather",
         "catalog" => "Ephemeris",
+        "star_catalog" => "Star Catalogs",
         other => other,
     }
 }
@@ -202,15 +203,20 @@ fn provider_label(src: &str) -> &str {
         "usno" => "USNO",
         "obspm" => "Paris Observatory",
         "celestrak" => "CelesTrak",
+        "cds" => "CDS / VizieR",
         other => other,
     }
 }
 
 /// Group products by category (→ collapsible section) then provider (→ table),
-/// preserving first-seen order.
+/// preserving first-seen order. Products that are not listed (`Disabled`) are
+/// skipped entirely, along with any category or provider left with no rows —
+/// otherwise disabling a whole provider leaves an empty section behind.
 fn render_sections(domain: &str, items: &[Product]) -> String {
+    let listed: Vec<&Product> = items.iter().filter(|p| p.availability.is_listed()).collect();
+
     let mut cats: Vec<&str> = Vec::new();
-    for p in items {
+    for p in &listed {
         if !cats.contains(&p.category) {
             cats.push(p.category);
         }
@@ -224,7 +230,7 @@ fn render_sections(domain: &str, items: &[Product]) -> String {
         ));
 
         let mut provs: Vec<&str> = Vec::new();
-        for p in items.iter().filter(|p| p.category == cat) {
+        for p in listed.iter().filter(|p| p.category == cat) {
             if !provs.contains(&p.source) {
                 provs.push(p.source);
             }
@@ -240,7 +246,7 @@ fn render_sections(domain: &str, items: &[Product]) -> String {
 <th class=\"dh\"></th><th>Product</th><th>Frequency</th><th>Mirror URL</th><th>Size</th><th>Last updated</th><th>Last checked</th><th>Hash (md5)</th>\
 </tr></thead>\n<tbody>\n",
             );
-            for p in items.iter().filter(|p| p.category == cat && p.source == prov) {
+            for p in listed.iter().filter(|p| p.category == cat && p.source == prov) {
                 let key = object_key(p);
                 push_row(&mut out, p, domain, &key, &p.filename, &key);
                 if let Some(akey) = alias_key(p) {
@@ -301,7 +307,7 @@ fn fmt_time_of_day(d: std::time::Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::products::Product;
+    use crate::products::{Availability, Product};
     use std::time::Duration;
 
     fn sample() -> Vec<Product> {
@@ -310,7 +316,7 @@ mod tests {
                 category: "eop", source: "iers", name: "c04_20u24",
                 url: "https://example.test/x".into(),
                 filename: "EOP_C04_one_file_1962-now.txt".into(),
-                content_type: "text/plain", active: true, alias_name: Some("c04"),
+                content_type: "text/plain", availability: Availability::Active, alias_name: Some("c04"),
                 info_url: Some("https://iers.example/info"), cadence_label: None,
                 schedule: Schedule::Every(Duration::from_secs(3600)),
             },
@@ -318,7 +324,7 @@ mod tests {
                 category: "eop", source: "iers", name: "c04_19u20",
                 url: "https://example.test/old".into(),
                 filename: "EOP_C04_one_file_1962-now.txt".into(),
-                content_type: "text/plain", active: false, alias_name: None,
+                content_type: "text/plain", availability: Availability::Frozen, alias_name: None,
                 info_url: None, cadence_label: None,
                 schedule: Schedule::Every(Duration::from_secs(3600)),
             },
@@ -329,6 +335,103 @@ mod tests {
     fn lists_active_product_url() {
         let html = render_index_html("example.org", &sample());
         assert!(html.contains("https://example.org/eop/iers/c04_20u24/latest/EOP_C04_one_file_1962-now.txt"));
+    }
+
+    fn product(category: &'static str, source: &'static str, name: &'static str, availability: Availability) -> Product {
+        Product {
+            category, source, name,
+            url: format!("https://h/{name}"), filename: format!("{name}.txt"),
+            content_type: "text/plain", availability, alias_name: None,
+            info_url: None, cadence_label: None,
+            schedule: Schedule::Every(Duration::from_secs(3600)),
+        }
+    }
+
+    /// Every `<tr>` whose data-key names `key_fragment`, so a test can assert
+    /// about those rows specifically rather than about the whole page. A product
+    /// with an alias contributes two rows sharing one canonical data-key.
+    fn rows_for<'a>(html: &'a str, key_fragment: &str) -> Vec<&'a str> {
+        let rows: Vec<&str> = html
+            .split("<tr ")
+            .filter(|r| r.starts_with("data-key=") && r.contains(key_fragment))
+            .collect();
+        assert!(!rows.is_empty(), "expected at least one row for {key_fragment}");
+        rows
+    }
+
+    #[test]
+    fn frozen_product_is_listed_greyed_out() {
+        let html = render_index_html("example.org", &sample());
+        assert!(
+            html.contains("eop/iers/c04_19u20/latest/"),
+            "a frozen product keeps its row so existing consumers still find the path"
+        );
+        // Assert the class is on the FROZEN row and NOT on the active one —
+        // checking only that "discontinued" appears somewhere on the page would
+        // also pass if the two were swapped.
+        for row in rows_for(&html, "c04_19u20") {
+            assert!(row.contains("class=\"discontinued\""), "the frozen row is greyed out");
+        }
+        for row in rows_for(&html, "c04_20u24") {
+            assert!(!row.contains("discontinued"), "the active row is NOT greyed out: {row}");
+        }
+    }
+
+    #[test]
+    fn disabled_product_renders_no_row() {
+        let items = vec![
+            product("eop", "iers", "kept", Availability::Active),
+            product("eop", "iers", "paused", Availability::Disabled),
+        ];
+        let html = render_index_html("example.org", &items);
+        assert!(html.contains("eop/iers/kept/latest/"));
+        assert!(
+            !html.contains("paused"),
+            "a disabled product must not be advertised anywhere on the page"
+        );
+    }
+
+    #[test]
+    fn category_with_only_disabled_products_renders_no_section() {
+        // This is the CelesTrak case: disabling a provider empties whole
+        // categories, which must not leave an empty section or a bare table.
+        let items = vec![
+            product("eop", "iers", "kept", Availability::Active),
+            product("catalog", "celestrak", "starlink", Availability::Disabled),
+            product("space_weather", "celestrak", "sw_all", Availability::Disabled),
+        ];
+        let html = render_index_html("example.org", &items);
+        assert!(html.contains("Earth Orientation Parameters"));
+        assert!(!html.contains("Ephemeris"), "empty category section dropped");
+        assert!(!html.contains("Space Weather"), "empty category section dropped");
+        assert!(!html.contains("CelesTrak"), "empty provider table dropped");
+        assert_eq!(html.matches("<details").count(), 1, "exactly one section survives");
+        assert_eq!(html.matches("<table>").count(), 1, "no header-only tables");
+    }
+
+    #[test]
+    fn provider_with_only_disabled_products_renders_no_table() {
+        // A category that survives must still drop its emptied providers.
+        let items = vec![
+            product("eop", "iers", "kept", Availability::Active),
+            product("eop", "celestrak", "paused", Availability::Disabled),
+        ];
+        let html = render_index_html("example.org", &items);
+        assert!(html.contains("IERS"));
+        assert!(!html.contains("CelesTrak"));
+        assert_eq!(html.matches("<table>").count(), 1);
+    }
+
+    #[test]
+    fn real_registry_lists_eop_and_star_catalogs_only() {
+        let html = render_index_html("example.org", &crate::products::products());
+        assert!(html.contains("Earth Orientation Parameters"));
+        assert!(html.contains("Star Catalogs"));
+        assert!(html.contains("CDS / VizieR"));
+        assert!(html.contains("star_catalog/cds/fk5/latest/catalog.gz"));
+        assert!(html.contains("star_catalog/cds/hipparcos/latest/hip_main.dat"));
+        assert!(!html.contains("CelesTrak"), "CelesTrak is disabled and unadvertised");
+        assert!(!html.contains("celestrak.org"), "not even as an upstream source link");
     }
 
     #[test]
@@ -552,7 +655,7 @@ mod tests {
             category: "eop", source: "usno", name: "finals2000a_all",
             url: "https://maia.usno.navy.mil/ser7/finals2000A.all".into(),
             filename: "finals2000A.all".into(),
-            content_type: "text/plain", active: true, alias_name: None,
+            content_type: "text/plain", availability: Availability::Active, alias_name: None,
             info_url: None, cadence_label: None,
             schedule: Schedule::WeeklyAt {
                 weekday: Weekday::Thu,

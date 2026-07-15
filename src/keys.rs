@@ -21,7 +21,7 @@ pub fn public_url(domain: &str, key: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::products::Product;
+    use crate::products::{Availability, Product};
     use crate::schedule::Schedule;
     use std::time::Duration;
 
@@ -30,7 +30,7 @@ mod tests {
             category: "eop", source: "iers", name: "c04_20u24",
             url: "https://example.test/x".into(),
             filename: "EOP_C04_one_file_1962-now.txt".into(),
-            content_type: "text/plain", active: true, alias_name: Some("c04"),
+            content_type: "text/plain", availability: Availability::Active, alias_name: Some("c04"),
             info_url: None, cadence_label: None,
             schedule: Schedule::Every(Duration::from_secs(3600)),
         }
@@ -41,7 +41,7 @@ mod tests {
             category: "eop", source: "iers", name: "finals_all",
             url: "https://example.test/y".into(),
             filename: "finals.all.iau2000.txt".into(),
-            content_type: "text/plain", active: true, alias_name: None,
+            content_type: "text/plain", availability: Availability::Active, alias_name: None,
             info_url: None, cadence_label: None,
             schedule: Schedule::Every(Duration::from_secs(3600)),
         }

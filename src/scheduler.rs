@@ -10,12 +10,12 @@ use crate::products::Product;
 use crate::ratelimit::RateLimiter;
 use crate::status::Status;
 
-/// Indices of active products that are due to be fetched at `now_ms`.
+/// Indices of fetched products that are due to be fetched at `now_ms`.
 pub fn due_indices(all: &[Product], status: &Status, now_ms: u64) -> Vec<usize> {
     all.iter()
         .enumerate()
         .filter(|(_, p)| {
-            p.active && {
+            p.availability.is_fetched() && {
                 let e = status.get(&object_key(p));
                 let la = e.map(|e| e.last_attempt);
                 let lc = e.map(|e| e.last_checked);
@@ -30,7 +30,7 @@ pub fn due_indices(all: &[Product], status: &Status, now_ms: u64) -> Vec<usize> 
 /// Returns 0 when something is already due.
 pub fn sleep_until_due_ms(all: &[Product], status: &Status, now_ms: u64, cap_ms: u64) -> u64 {
     let mut soonest = cap_ms;
-    for p in all.iter().filter(|p| p.active) {
+    for p in all.iter().filter(|p| p.availability.is_fetched()) {
         let key = object_key(p);
         let e = status.get(&key);
         let la = e.map(|e| e.last_attempt);
@@ -41,7 +41,6 @@ pub fn sleep_until_due_ms(all: &[Product], status: &Status, now_ms: u64, cap_ms:
 }
 
 const WAKE_CAP: Duration = Duration::from_secs(3600);
-const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// Run forever: on each wake, sync the due products, then sleep until the next one.
 pub async fn run_daemon(cfg: &Config) -> anyhow::Result<()> {
@@ -49,7 +48,7 @@ pub async fn run_daemon(cfg: &Config) -> anyhow::Result<()> {
     use crate::products::products;
     use crate::store::R2Store;
 
-    let fetcher = HttpFetcher::new(FETCH_TIMEOUT, &cfg.site_domain)?;
+    let fetcher = HttpFetcher::new(&cfg.site_domain)?;
     let store = R2Store::new(cfg)?;
     let mut rate = RateLimiter::new(cfg.host_min_interval, cfg.stagger_jitter);
     let all = products();
@@ -62,10 +61,10 @@ pub async fn run_daemon(cfg: &Config) -> anyhow::Result<()> {
     // index.html, reflecting registry/schedule changes (run_sync uploads the page
     // before any fetch). Pass no products in the normal case — the loop below
     // owns due-based fetching, so this refresh costs no upstream requests. Only
-    // RUN_ON_START forces a full re-pull of every active product here.
+    // RUN_ON_START forces a full re-pull of every fetched product here.
     let startup: Vec<&Product> = if cfg.run_on_start {
         info!("RUN_ON_START set — forcing a full sync");
-        all.iter().filter(|p| p.active).collect()
+        all.iter().filter(|p| p.availability.is_fetched()).collect()
     } else {
         Vec::new()
     };
@@ -110,8 +109,8 @@ mod tests {
     fn everything_due_when_status_empty() {
         let all = products();
         let s = Status::new();
-        let active = all.iter().filter(|p| p.active).count();
-        assert_eq!(due_indices(&all, &s, NOW).len(), active);
+        let fetched = all.iter().filter(|p| p.availability.is_fetched()).count();
+        assert_eq!(due_indices(&all, &s, NOW).len(), fetched);
         assert_eq!(sleep_until_due_ms(&all, &s, NOW, 3_600_000), 0);
     }
 
@@ -119,20 +118,42 @@ mod tests {
     fn sleeps_until_soonest_interval() {
         let all = products();
         let mut s = Status::new();
-        for p in all.iter().filter(|p| p.active) {
+        for p in all.iter().filter(|p| p.availability.is_fetched()) {
             apply_update(&mut s, &object_key(p), "h", 1, NOW);
         }
         assert!(due_indices(&all, &s, NOW).is_empty(), "all just attempted => none due");
-        // soonest cadence is the 8h CelesTrak/space-weather groups
-        let sleep = sleep_until_due_ms(&all, &s, NOW, 24 * 3_600_000);
-        assert_eq!(sleep, 8 * 3_600_000);
+        // Soonest cadence is the daily EOP files. The 8h CelesTrak groups are
+        // disabled, so they must not pull the daemon awake every 8h for products
+        // it will never fetch.
+        let sleep = sleep_until_due_ms(&all, &s, NOW, 48 * 3_600_000);
+        assert_eq!(sleep, 24 * 3_600_000);
+    }
+
+    #[test]
+    fn disabled_products_are_never_due_and_never_wake_the_daemon() {
+        let all = products();
+        let s = Status::new(); // nothing ever fetched => everything fetchable is due
+        let due: Vec<&str> = due_indices(&all, &s, NOW).iter().map(|&i| all[i].name).collect();
+        assert!(
+            !due.iter().any(|n| all.iter().any(|p| p.name == *n && p.source == "celestrak")),
+            "no disabled CelesTrak product may be due: {due:?}"
+        );
+
+        // Even with an empty status, a registry of only disabled products must
+        // sleep the full cap rather than spin.
+        let disabled: Vec<Product> = products()
+            .into_iter()
+            .filter(|p| p.source == "celestrak")
+            .collect();
+        assert!(due_indices(&disabled, &s, NOW).is_empty());
+        assert_eq!(sleep_until_due_ms(&disabled, &s, NOW, 3_600_000), 3_600_000);
     }
 
     #[test]
     fn sleep_is_capped() {
         let all = products();
         let mut s = Status::new();
-        for p in all.iter().filter(|p| p.active) {
+        for p in all.iter().filter(|p| p.availability.is_fetched()) {
             apply_update(&mut s, &object_key(p), "h", 1, NOW);
         }
         assert_eq!(sleep_until_due_ms(&all, &s, NOW, 60_000), 60_000, "clamped to cap");
@@ -147,7 +168,7 @@ mod tests {
         let weekly = Product {
             category: "eop", source: "usno", name: "finals_test",
             url: "https://h/finals".into(), filename: "finals.all".into(),
-            content_type: "text/plain", active: true, alias_name: None,
+            content_type: "text/plain", availability: crate::products::Availability::Active, alias_name: None,
             info_url: None, cadence_label: None,
             schedule: Schedule::WeeklyAt {
                 weekday: Weekday::Thu,
