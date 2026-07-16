@@ -138,5 +138,33 @@ alias) and redeploy.
 
 Note that upstream fetches are bounded by an inactivity timeout rather than a
 total deadline (`src/fetch.rs`), so a large-but-slow product is fine while a
-dead host still fails fast. The largest product today (Hipparcos `hip_main.dat`,
-~53 MB) takes ~80s to download.
+dead host still fails fast. The largest product today
+(`Hipparcos_Catalog.txt`, ~53 MB) takes ~80s to download.
+
+## Star catalogs
+
+The star catalogs are served as plain text under a uniform naming scheme, so
+both datasets are consumed identically:
+
+| Mirror path | Upstream |
+|---|---|
+| `star_catalog/cds/fk5/latest/FK5_Catalog.txt` | `ftp/I/149A/catalog.gz` (gunzipped) |
+| `star_catalog/cds/fk5/latest/FK5_Readme.txt` | `ftp/I/149A/ReadMe` |
+| `star_catalog/cds/hipparcos/latest/Hipparcos_Catalog.txt` | `ftp/cats/I/239/hip_main.dat` |
+| `star_catalog/cds/hipparcos/latest/Hipparcos_Readme.txt` | `ftp/cats/I/239/ReadMe` |
+
+That uniformity costs one transform: CDS archives FK5 *only* as `catalog.gz` and
+Hipparcos *only* uncompressed, so products carrying `gunzip: true` are
+decompressed before being hashed and served (`decode_body` in `src/sync.rs`).
+The served bytes are the archive's contents, which is what each `ReadMe`'s
+fixed-width byte columns describe.
+
+Two upstream traps, both verified and both worth not rediscovering:
+
+- **`cdsarc.u-strasbg.fr` presents a self-signed certificate.** It serves
+  identical bytes, but only over `http://`. Use `cdsarc.cds.unistra.fr`.
+- **VizieR's `nph-Cat/txt.gz` and `nph-Cat/txt` endpoints are not shortcuts.**
+  `txt.gz` appends an uncompressed copy of the table *after* the gzip member
+  (67.6 MB to deliver 15.3 MB, and `gunzip` reports trailing garbage). `txt`
+  re-renders the table with a column-ruler header and does not reproduce the
+  archive bytes. Fetch from the `ftp/` tree instead.

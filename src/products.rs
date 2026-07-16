@@ -40,6 +40,11 @@ pub struct Product {
     pub url: String,               // upstream HTTPS source
     pub filename: String,          // stable served filename
     pub content_type: &'static str,
+    /// Upstream serves this file gzip-archived; decompress it before serving so
+    /// the mirrored bytes are the plain-text form the product's ReadMe documents.
+    /// (Not HTTP Content-Encoding — these are `.gz` files, which reqwest's own
+    /// gzip support does not touch.)
+    pub gunzip: bool,
     pub availability: Availability,
     pub alias_name: Option<&'static str>, // also written under this stable path segment
     pub info_url: Option<&'static str>,   // human-readable docs page (display only)
@@ -71,7 +76,7 @@ pub fn products() -> Vec<Product> {
             category: "eop", source: "iers", name: "finals_all",
             url: "https://datacenter.iers.org/data/latestVersion/finals.all.iau2000.txt".into(),
             filename: "finals.all.iau2000.txt".into(),
-            content_type: "text/plain", availability: Availability::Active, alias_name: None,
+            content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: None,
             info_url: Some("https://www.iers.org/IERS/EN/DataProducts/EarthOrientationData/eop.html"),
             cadence_label: None,
             schedule: Schedule::Every(Duration::from_secs(24 * 3600)),
@@ -80,7 +85,7 @@ pub fn products() -> Vec<Product> {
             category: "eop", source: "iers", name: "c04_20u24",
             url: "https://datacenter.iers.org/data/latestVersion/EOP_20u24_C04_one_file_1962-now.txt".into(),
             filename: "EOP_C04_one_file_1962-now.txt".into(),
-            content_type: "text/plain", availability: Availability::Active, alias_name: Some("c04"),
+            content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: Some("c04"),
             info_url: Some("https://www.iers.org/IERS/EN/DataProducts/EarthOrientationData/eop.html"),
             cadence_label: None,
             schedule: Schedule::Every(Duration::from_secs(7 * 24 * 3600)),
@@ -89,7 +94,7 @@ pub fn products() -> Vec<Product> {
             category: "eop", source: "usno", name: "finals2000a_all",
             url: "https://maia.usno.navy.mil/ser7/finals2000A.all".into(),
             filename: "finals2000A.all".into(),
-            content_type: "text/plain", availability: Availability::Active, alias_name: None,
+            content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: None,
             info_url: Some("https://maia.usno.navy.mil/ser7/readme"),
             cadence_label: None,
             schedule: Schedule::WeeklyAt {
@@ -101,7 +106,7 @@ pub fn products() -> Vec<Product> {
             category: "eop", source: "usno", name: "finals2000a_daily",
             url: "https://maia.usno.navy.mil/ser7/finals2000A.daily".into(),
             filename: "finals2000A.daily".into(),
-            content_type: "text/plain", availability: Availability::Active, alias_name: None,
+            content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: None,
             info_url: Some("https://maia.usno.navy.mil/ser7/readme"),
             cadence_label: None,
             schedule: Schedule::Every(Duration::from_secs(24 * 3600)),
@@ -110,7 +115,7 @@ pub fn products() -> Vec<Product> {
             category: "eop", source: "obspm", name: "c04_1962now",
             url: "https://hpiers.obspm.fr/iers/eop/eopc04/eopc04.1962-now".into(),
             filename: "eopc04.1962-now".into(),
-            content_type: "text/plain", availability: Availability::Active, alias_name: None,
+            content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: None,
             info_url: Some("https://hpiers.obspm.fr/iers/eop/eopc04/readme"),
             cadence_label: None,
             schedule: Schedule::Every(Duration::from_secs(24 * 3600)),
@@ -119,7 +124,7 @@ pub fn products() -> Vec<Product> {
             category: "space_weather", source: "celestrak", name: "sw_all",
             url: "https://celestrak.org/SpaceData/sw19571001.txt".into(),
             filename: "sw19571001.txt".into(),
-            content_type: "text/plain", availability: CELESTRAK, alias_name: None,
+            content_type: "text/plain", gunzip: false, availability: CELESTRAK, alias_name: None,
             info_url: Some("https://celestrak.org/SpaceData/"),
             cadence_label: None,
             schedule: Schedule::Every(Duration::from_secs(8 * 3600)),
@@ -131,23 +136,32 @@ pub fn products() -> Vec<Product> {
     // is mirrored alongside the data rather than merely linked); `object_key`
     // includes the filename, so they do not collide.
     //
+    // Every file is served as plain text under a uniform
+    // <Dataset>_Catalog.txt / <Dataset>_Readme.txt name, so the two datasets are
+    // consumed identically. That uniformity is not free upstream: CDS archives
+    // FK5 only as catalog.gz and Hipparcos only uncompressed, so FK5 is
+    // gunzipped here. VizieR's nph-Cat/txt endpoint is deliberately not used as
+    // a plain-text shortcut — it re-renders the table with a column-ruler header
+    // and does not reproduce the archive bytes the ReadMe describes.
+    //
     // Host note: cdsarc.u-strasbg.fr serves the same bytes but presents a
     // self-signed certificate, so only cdsarc.cds.unistra.fr works over https.
-    for (name, filename, path, content_type, info_url) in [
-        ("fk5", "catalog.gz", "I/149A/catalog.gz", "application/gzip",
+    for (name, filename, path, gunzip, info_url) in [
+        ("fk5", "FK5_Catalog.txt", "I/149A/catalog.gz", true,
             "https://cdsarc.cds.unistra.fr/viz-bin/cat/I/149A"),
-        ("fk5", "ReadMe", "I/149A/ReadMe", "text/plain",
+        ("fk5", "FK5_Readme.txt", "I/149A/ReadMe", false,
             "https://cdsarc.cds.unistra.fr/viz-bin/cat/I/149A"),
-        ("hipparcos", "hip_main.dat", "cats/I/239/hip_main.dat", "text/plain",
+        ("hipparcos", "Hipparcos_Catalog.txt", "cats/I/239/hip_main.dat", false,
             "https://cdsarc.cds.unistra.fr/viz-bin/cat/I/239"),
-        ("hipparcos", "ReadMe", "cats/I/239/ReadMe", "text/plain",
+        ("hipparcos", "Hipparcos_Readme.txt", "cats/I/239/ReadMe", false,
             "https://cdsarc.cds.unistra.fr/viz-bin/cat/I/239"),
     ] {
         items.push(Product {
             category: "star_catalog", source: "cds", name,
             url: format!("https://cdsarc.cds.unistra.fr/ftp/{path}"),
             filename: filename.into(),
-            content_type, availability: Availability::Active, alias_name: None,
+            content_type: "text/plain", gunzip,
+            availability: Availability::Active, alias_name: None,
             info_url: Some(info_url),
             cadence_label: None,
             schedule: STAR_CATALOG_CHECK,
@@ -159,7 +173,7 @@ pub fn products() -> Vec<Product> {
             category: "catalog", source: "celestrak", name: slug,
             url: format!("https://celestrak.org/NORAD/elements/gp.php?GROUP={slug}&FORMAT=json"),
             filename: format!("{slug}.json"),
-            content_type: "application/json", availability: CELESTRAK, alias_name: None,
+            content_type: "application/json", gunzip: false, availability: CELESTRAK, alias_name: None,
             info_url: Some("https://celestrak.org/NORAD/documentation/gp-data-formats.php"),
             cadence_label: None,
             schedule: Schedule::Every(Duration::from_secs(8 * 3600)),
@@ -207,11 +221,11 @@ mod tests {
         // non-fetched products collided on an alias, nothing would fetch them.
         let items = vec![
             Product { category: "eop", source: "iers", name: "c04_old", url: "u".into(),
-                filename: "f".into(), content_type: "text/plain", availability: Availability::Frozen,
+                filename: "f".into(), content_type: "text/plain", gunzip: false, availability: Availability::Frozen,
                 alias_name: Some("c04"), info_url: None, cadence_label: None,
                 schedule: Schedule::Every(Duration::from_secs(3600)) },
             Product { category: "eop", source: "iers", name: "c04_new", url: "u".into(),
-                filename: "f".into(), content_type: "text/plain", availability: Availability::Active,
+                filename: "f".into(), content_type: "text/plain", gunzip: false, availability: Availability::Active,
                 alias_name: Some("c04"), info_url: None, cadence_label: None,
                 schedule: Schedule::Every(Duration::from_secs(3600)) },
         ];
@@ -251,31 +265,34 @@ mod tests {
         let cds: Vec<&Product> = items.iter().filter(|p| p.category == "star_catalog").collect();
         assert_eq!(cds.len(), 4);
 
-        let keyed = |name: &str, filename: &str| -> &Product {
+        let keyed = |filename: &str| -> &Product {
             cds.iter()
-                .find(|p| p.name == name && p.filename == filename)
-                .unwrap_or_else(|| panic!("{name}/{filename} present"))
+                .find(|p| p.filename == filename)
+                .unwrap_or_else(|| panic!("{filename} present"))
         };
 
-        let fk5 = keyed("fk5", "catalog.gz");
+        let fk5 = keyed("FK5_Catalog.txt");
         assert_eq!(fk5.source, "cds");
         assert_eq!(fk5.url, "https://cdsarc.cds.unistra.fr/ftp/I/149A/catalog.gz");
-        assert_eq!(fk5.content_type, "application/gzip");
-        assert_eq!(crate::keys::object_key(fk5), "star_catalog/cds/fk5/latest/catalog.gz");
+        assert_eq!(crate::keys::object_key(fk5), "star_catalog/cds/fk5/latest/FK5_Catalog.txt");
+        assert!(fk5.gunzip, "CDS archives FK5 only as .gz; we serve the plain text it contains");
 
-        let hip = keyed("hipparcos", "hip_main.dat");
+        let hip = keyed("Hipparcos_Catalog.txt");
         assert_eq!(hip.url, "https://cdsarc.cds.unistra.fr/ftp/cats/I/239/hip_main.dat");
-        assert_eq!(hip.content_type, "text/plain");
-        assert_eq!(crate::keys::object_key(hip), "star_catalog/cds/hipparcos/latest/hip_main.dat");
+        assert_eq!(
+            crate::keys::object_key(hip),
+            "star_catalog/cds/hipparcos/latest/Hipparcos_Catalog.txt"
+        );
+        assert!(!hip.gunzip, "hip_main.dat is archived uncompressed");
 
         // The ReadMe defines the fixed-width byte columns; it is mirrored, not just linked.
-        for (name, url) in [
-            ("fk5", "https://cdsarc.cds.unistra.fr/ftp/I/149A/ReadMe"),
-            ("hipparcos", "https://cdsarc.cds.unistra.fr/ftp/cats/I/239/ReadMe"),
+        for (filename, url) in [
+            ("FK5_Readme.txt", "https://cdsarc.cds.unistra.fr/ftp/I/149A/ReadMe"),
+            ("Hipparcos_Readme.txt", "https://cdsarc.cds.unistra.fr/ftp/cats/I/239/ReadMe"),
         ] {
-            let readme = keyed(name, "ReadMe");
+            let readme = keyed(filename);
             assert_eq!(readme.url, url);
-            assert_eq!(readme.content_type, "text/plain");
+            assert!(!readme.gunzip);
         }
 
         for p in &cds {
@@ -283,6 +300,10 @@ mod tests {
             assert_eq!(p.schedule, Schedule::Every(Duration::from_secs(30 * 24 * 3600)));
             assert!(p.url.starts_with("https://cdsarc.cds.unistra.fr/"),
                 "cdsarc.u-strasbg.fr serves a self-signed cert over https: {}", p.url);
+            // The point of the naming/format scheme: both datasets are consumed
+            // identically, regardless of how CDS happens to archive each one.
+            assert_eq!(p.content_type, "text/plain", "{} is served as plain text", p.filename);
+            assert!(p.filename.ends_with(".txt"), "{} has a uniform .txt name", p.filename);
         }
     }
 
@@ -379,11 +400,11 @@ mod tests {
     fn duplicate_active_alias_is_rejected() {
         let dupes = vec![
             Product { category: "eop", source: "iers", name: "c04_a", url: "u".into(),
-                filename: "f".into(), content_type: "text/plain", availability: Availability::Active, alias_name: Some("c04"),
+                filename: "f".into(), content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: Some("c04"),
                 info_url: None, cadence_label: None,
                 schedule: Schedule::Every(Duration::from_secs(3600)) },
             Product { category: "eop", source: "iers", name: "c04_b", url: "u".into(),
-                filename: "f".into(), content_type: "text/plain", availability: Availability::Active, alias_name: Some("c04"),
+                filename: "f".into(), content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: Some("c04"),
                 info_url: None, cadence_label: None,
                 schedule: Schedule::Every(Duration::from_secs(3600)) },
         ];

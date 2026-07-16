@@ -316,7 +316,7 @@ mod tests {
                 category: "eop", source: "iers", name: "c04_20u24",
                 url: "https://example.test/x".into(),
                 filename: "EOP_C04_one_file_1962-now.txt".into(),
-                content_type: "text/plain", availability: Availability::Active, alias_name: Some("c04"),
+                content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: Some("c04"),
                 info_url: Some("https://iers.example/info"), cadence_label: None,
                 schedule: Schedule::Every(Duration::from_secs(3600)),
             },
@@ -324,7 +324,7 @@ mod tests {
                 category: "eop", source: "iers", name: "c04_19u20",
                 url: "https://example.test/old".into(),
                 filename: "EOP_C04_one_file_1962-now.txt".into(),
-                content_type: "text/plain", availability: Availability::Frozen, alias_name: None,
+                content_type: "text/plain", gunzip: false, availability: Availability::Frozen, alias_name: None,
                 info_url: None, cadence_label: None,
                 schedule: Schedule::Every(Duration::from_secs(3600)),
             },
@@ -341,7 +341,7 @@ mod tests {
         Product {
             category, source, name,
             url: format!("https://h/{name}"), filename: format!("{name}.txt"),
-            content_type: "text/plain", availability, alias_name: None,
+            content_type: "text/plain", gunzip: false, availability, alias_name: None,
             info_url: None, cadence_label: None,
             schedule: Schedule::Every(Duration::from_secs(3600)),
         }
@@ -428,8 +428,10 @@ mod tests {
         assert!(html.contains("Earth Orientation Parameters"));
         assert!(html.contains("Star Catalogs"));
         assert!(html.contains("CDS / VizieR"));
-        assert!(html.contains("star_catalog/cds/fk5/latest/catalog.gz"));
-        assert!(html.contains("star_catalog/cds/hipparcos/latest/hip_main.dat"));
+        assert!(html.contains("star_catalog/cds/fk5/latest/FK5_Catalog.txt"));
+        assert!(html.contains("star_catalog/cds/fk5/latest/FK5_Readme.txt"));
+        assert!(html.contains("star_catalog/cds/hipparcos/latest/Hipparcos_Catalog.txt"));
+        assert!(html.contains("star_catalog/cds/hipparcos/latest/Hipparcos_Readme.txt"));
         assert!(!html.contains("CelesTrak"), "CelesTrak is disabled and unadvertised");
         assert!(!html.contains("celestrak.org"), "not even as an upstream source link");
     }
@@ -655,7 +657,7 @@ mod tests {
             category: "eop", source: "usno", name: "finals2000a_all",
             url: "https://maia.usno.navy.mil/ser7/finals2000A.all".into(),
             filename: "finals2000A.all".into(),
-            content_type: "text/plain", availability: Availability::Active, alias_name: None,
+            content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: None,
             info_url: None, cadence_label: None,
             schedule: Schedule::WeeklyAt {
                 weekday: Weekday::Thu,

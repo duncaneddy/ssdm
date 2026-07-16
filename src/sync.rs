@@ -4,6 +4,7 @@
 
 use std::path::Path;
 
+use anyhow::Context;
 use log::{info, warn};
 
 use crate::keys::{alias_key, object_key};
@@ -100,20 +101,35 @@ pub async fn run_sync<F: Fetcher, S: Store>(
     for p in process {
         let key = object_key(p);
         rate.throttle(&p.url).await;
-        match fetcher.fetch(&p.url).await {
+        // A corrupt archive is treated exactly like a failed download: the prior
+        // object and its status stay intact, and the product's interval is the retry.
+        match fetcher.fetch(&p.url).await.and_then(|b| decode_body(p, b)) {
             Ok(bytes) => {
                 summary.checked += 1;
                 let hash = content_hash(&bytes);
-                let changed = apply_update(&mut status, &key, &hash, bytes.len() as u64, now_ms);
-                if changed {
-                    summary.changed += 1;
-                    if let Err(e) = persist_bytes(store, data_dir, p, &key, &bytes).await {
-                        warn!("upload failed for {key}: {e}");
-                    } else {
-                        info!("updated {key} ({} bytes)", bytes.len());
-                    }
-                } else {
+                let is_current = status.get(&key).map(|e| e.hash == hash).unwrap_or(false);
+                if is_current {
+                    // Bytes already in the bucket: record the successful check only.
+                    apply_update(&mut status, &key, &hash, bytes.len() as u64, now_ms);
                     info!("unchanged {key}");
+                } else {
+                    // Commit the hash to status ONLY after the bytes are stored.
+                    // Recording it first would make the next pass hash the same
+                    // content, conclude "unchanged", and never retry — leaving the
+                    // object missing while the daemon reports success. For a static
+                    // catalog, nothing upstream would ever dislodge that.
+                    match persist_bytes(store, data_dir, p, &key, &bytes).await {
+                        Ok(()) => {
+                            apply_update(&mut status, &key, &hash, bytes.len() as u64, now_ms);
+                            summary.changed += 1;
+                            info!("updated {key} ({} bytes)", bytes.len());
+                        }
+                        Err(e) => {
+                            summary.failed += 1;
+                            record_attempt(&mut status, &key, now_ms);
+                            warn!("upload failed for {key}: {e}");
+                        }
+                    }
                 }
             }
             Err(e) => {
@@ -136,6 +152,29 @@ pub async fn run_sync<F: Fetcher, S: Store>(
         summary.checked, summary.changed, summary.failed
     );
     summary
+}
+
+/// Decompress a gzip-archived product so it is stored, hashed, and served in the
+/// plain-text form its ReadMe documents. Change detection therefore keys off the
+/// bytes we actually serve, not the archive envelope.
+///
+/// `MultiGzDecoder`, not `GzDecoder`: the latter decodes only the first member
+/// and silently ignores whatever follows, so a concatenated archive would be
+/// truncated to its first member and trailing junk would pass as valid. Both
+/// failure modes would serve a plausible-looking partial catalog. (This is not a
+/// hypothetical shape for CDS — VizieR's own txt.gz endpoint returns a gzip
+/// member followed by an uncompressed copy of the same table.)
+fn decode_body(p: &Product, bytes: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+    use std::io::Read;
+
+    if !p.gunzip {
+        return Ok(bytes);
+    }
+    let mut out = Vec::new();
+    flate2::read::MultiGzDecoder::new(&bytes[..])
+        .read_to_end(&mut out)
+        .with_context(|| format!("gunzip {} ({} bytes)", p.url, bytes.len()))?;
+    Ok(out)
 }
 
 async fn persist_bytes<S: Store>(
@@ -178,12 +217,26 @@ mod tests {
 
     #[derive(Default)]
     struct FakeStore {
-        puts: Mutex<Vec<String>>,    // keys put
+        // (key, body) of every successful put, so tests can assert on the bytes
+        // that actually reached the bucket rather than inferring them.
+        puts: Mutex<Vec<(String, Vec<u8>)>>,
         get_body: Option<Vec<u8>>,   // bytes returned by get(), None => 404
+        fail_put_for: Option<String>, // key whose put fails, to model an upload error
+    }
+    impl FakeStore {
+        fn put_keys(&self) -> Vec<String> {
+            self.puts.lock().unwrap().iter().map(|(k, _)| k.clone()).collect()
+        }
+        fn body_of(&self, key: &str) -> Option<Vec<u8>> {
+            self.puts.lock().unwrap().iter().rev().find(|(k, _)| k == key).map(|(_, b)| b.clone())
+        }
     }
     impl Store for FakeStore {
-        async fn put(&self, key: &str, _bytes: Vec<u8>, _ct: &str, _cc: &str) -> anyhow::Result<()> {
-            self.puts.lock().unwrap().push(key.to_string());
+        async fn put(&self, key: &str, bytes: Vec<u8>, _ct: &str, _cc: &str) -> anyhow::Result<()> {
+            if self.fail_put_for.as_deref() == Some(key) {
+                return Err(anyhow::anyhow!("simulated upload failure for {key}"));
+            }
+            self.puts.lock().unwrap().push((key.to_string(), bytes));
             Ok(())
         }
         async fn get(&self, _key: &str) -> anyhow::Result<Option<Vec<u8>>> {
@@ -195,10 +248,163 @@ mod tests {
         Product {
             category: "catalog", source: "celestrak", name: Box::leak(name.to_string().into_boxed_str()),
             url: url.into(), filename: format!("{name}.json"),
-            content_type: "application/json", availability: crate::products::Availability::Active, alias_name: None,
+            content_type: "application/json", gunzip: false, availability: crate::products::Availability::Active, alias_name: None,
             info_url: None, cadence_label: None,
             schedule: Schedule::Every(Duration::from_secs(3600)),
         }
+    }
+
+    fn gzipped(plain: &[u8]) -> Vec<u8> {
+        use std::io::Write;
+        let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        e.write_all(plain).unwrap();
+        e.finish().unwrap()
+    }
+
+    fn gz_product(name: &str, url: &str, gunzip: bool) -> Product {
+        Product {
+            gunzip,
+            ..product(name, url)
+        }
+    }
+
+    #[tokio::test]
+    async fn gzip_product_is_stored_and_hashed_decompressed() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain = b"FK5 fixed-width rows".to_vec();
+        let p = gz_product("fk5", "https://h/catalog.gz", true);
+        let all = vec![gz_product("fk5", "https://h/catalog.gz", true)];
+        let mut out = HashMap::new();
+        out.insert("https://h/catalog.gz".to_string(), Some(gzipped(&plain)));
+        let fetcher = FakeFetcher { out };
+        let store = FakeStore::default();
+        let mut rate = RateLimiter::new(Duration::ZERO, Duration::ZERO);
+
+        let sum = run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), "example.org", 1000).await;
+        assert_eq!((sum.checked, sum.changed, sum.failed), (1, 1, 0));
+
+        // Assert on the bytes that actually reached the bucket, and separately on
+        // the local mirror — inferring one from the other would hide a divergence.
+        let key = crate::keys::object_key(&p);
+        assert_eq!(
+            store.body_of(&key).expect("product uploaded"),
+            plain,
+            "the gzip envelope must not be served"
+        );
+        let written = std::fs::read(dir.path().join(&key)).unwrap();
+        assert_eq!(written, plain, "the local mirror holds the same decoded bytes");
+
+        // Status records the served bytes: size and hash are the decompressed ones.
+        let st = crate::local::load_status(dir.path());
+        assert_eq!(st[&key].size, plain.len() as u64);
+        assert_eq!(st[&key].hash, crate::status::content_hash(&plain));
+    }
+
+    #[tokio::test]
+    async fn corrupt_gzip_is_treated_as_a_failed_fetch() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = gz_product("fk5", "https://h/catalog.gz", true);
+        let all = vec![gz_product("fk5", "https://h/catalog.gz", true)];
+        let key = crate::keys::object_key(&p);
+
+        // Seed a prior success so we can prove undecodable bytes do not clobber it.
+        let mut seed = crate::status::Status::new();
+        crate::status::apply_update(&mut seed, &key, "goodhash", 42, 500);
+        crate::local::save_status(dir.path(), &seed).unwrap();
+
+        let mut out = HashMap::new();
+        out.insert("https://h/catalog.gz".to_string(), Some(b"not gzip at all".to_vec()));
+        let fetcher = FakeFetcher { out };
+        let store = FakeStore::default();
+        let mut rate = RateLimiter::new(Duration::ZERO, Duration::ZERO);
+
+        let sum = run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), "example.org", 1000).await;
+        assert_eq!((sum.checked, sum.changed, sum.failed), (0, 0, 1), "undecodable => failed");
+        assert!(
+            !store.put_keys().iter().any(|k| k == &key),
+            "a product that failed to decode must not be uploaded"
+        );
+        let st = crate::local::load_status(dir.path());
+        assert_eq!(st[&key].hash, "goodhash", "prior good content preserved");
+        assert_eq!(st[&key].last_attempt, 1000, "attempt still recorded");
+    }
+
+    #[test]
+    fn gzip_decode_rejects_trailing_junk_and_keeps_every_member() {
+        let p = gz_product("fk5", "https://h/catalog.gz", true);
+
+        // A gzip member followed by non-gzip bytes must fail, not silently yield
+        // the first member. VizieR's txt.gz endpoint returns exactly this shape.
+        let mut junk = gzipped(b"REAL");
+        junk.extend_from_slice(b"TRAILING JUNK");
+        assert!(
+            decode_body(&p, junk).is_err(),
+            "trailing junk must not be silently discarded"
+        );
+
+        // A concatenated (multi-member) archive must decode in full, not be
+        // truncated to its first member — that would serve a partial catalog.
+        let mut two = gzipped(b"FIRST");
+        two.extend_from_slice(&gzipped(b"SECOND"));
+        assert_eq!(decode_body(&p, two).unwrap(), b"FIRSTSECOND");
+    }
+
+    #[tokio::test]
+    async fn non_gzip_product_bytes_pass_through_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        // Bytes that happen to be gzip are still served verbatim when gunzip is false.
+        let body = gzipped(b"payload");
+        let p = gz_product("plain", "https://h/plain", false);
+        let all = vec![gz_product("plain", "https://h/plain", false)];
+        let mut out = HashMap::new();
+        out.insert("https://h/plain".to_string(), Some(body.clone()));
+        let fetcher = FakeFetcher { out };
+        let store = FakeStore::default();
+        let mut rate = RateLimiter::new(Duration::ZERO, Duration::ZERO);
+
+        run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), "example.org", 1000).await;
+        let written = std::fs::read(dir.path().join(crate::keys::object_key(&p))).unwrap();
+        assert_eq!(written, body, "gunzip: false must not decode anything");
+    }
+
+    #[tokio::test]
+    async fn failed_upload_does_not_mark_content_current() {
+        // If a product's bytes never reached the bucket, status must NOT record
+        // their hash as current. Recording it makes the next pass compute the
+        // same hash, conclude "unchanged", and skip the upload forever — leaving
+        // the object permanently missing while the daemon reports success. For a
+        // static catalog whose upstream content never changes again, "forever" is
+        // literal: nothing would ever dislodge the wrong status.
+        let dir = tempfile::tempdir().unwrap();
+        let p = product("active", "https://h/active");
+        let all = vec![product("active", "https://h/active")];
+        let key = crate::keys::object_key(&p);
+        let mut out = HashMap::new();
+        out.insert("https://h/active".to_string(), Some(b"data".to_vec()));
+
+        // Pass 1: fetch succeeds, upload fails.
+        let fetcher = FakeFetcher { out: out.clone() };
+        let store = FakeStore { fail_put_for: Some(key.clone()), ..Default::default() };
+        let mut rate = RateLimiter::new(Duration::ZERO, Duration::ZERO);
+        let sum = run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), "example.org", 1000).await;
+        assert_eq!(sum.failed, 1, "an upload failure is a failure, not a success");
+
+        let st = crate::local::load_status(dir.path());
+        assert_ne!(
+            st.get(&key).map(|e| e.hash.as_str()).unwrap_or(""),
+            crate::status::content_hash(b"data"),
+            "content that was never stored must not be recorded as current"
+        );
+
+        // Pass 2: same bytes, working store. The product MUST be uploaded now.
+        let fetcher = FakeFetcher { out };
+        let store = FakeStore::default();
+        let sum = run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), "example.org", 2000).await;
+        assert_eq!(sum.changed, 1, "the retry must re-upload");
+        assert!(
+            store.put_keys().contains(&key),
+            "a previously-failed upload must be retried on the next pass"
+        );
     }
 
     #[tokio::test]
@@ -214,7 +420,7 @@ mod tests {
 
         let sum = run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), "example.org", 1000).await;
         assert_eq!((sum.checked, sum.changed, sum.failed), (1, 1, 0));
-        let puts = store.puts.lock().unwrap();
+        let puts = store.put_keys();
         assert!(puts.contains(&"index.html".to_string()));
         assert!(puts.iter().any(|k| k.contains("active/latest/active.json")));
         assert!(puts.contains(&"status.json".to_string()), "status.json must be uploaded to R2 after each product");
@@ -240,7 +446,7 @@ mod tests {
                 .count()
         };
         assert_eq!(
-            data_key(&store.puts.lock().unwrap()),
+            data_key(&store.put_keys()),
             1,
             "first run uploads the product once"
         );
@@ -248,13 +454,13 @@ mod tests {
         let sum = run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), "example.org", 2000).await;
         assert_eq!((sum.checked, sum.changed, sum.failed), (1, 0, 0));
         assert_eq!(
-            data_key(&store.puts.lock().unwrap()),
+            data_key(&store.put_keys()),
             1,
             "unchanged content must not re-upload the product data"
         );
         // status.json must still be uploaded even when content is unchanged
         assert!(
-            store.puts.lock().unwrap().iter().filter(|k| k.as_str() == "status.json").count() >= 2,
+            store.put_keys().iter().filter(|k| k.as_str() == "status.json").count() >= 2,
             "status.json must be uploaded to R2 after each run"
         );
     }
@@ -272,7 +478,7 @@ mod tests {
 
         let sum = run_sync(&all, &[], &fetcher, &store, &mut rate, dir.path(), "example.org", 1000).await;
         assert_eq!((sum.checked, sum.changed, sum.failed), (0, 0, 0), "nothing fetched");
-        let puts = store.puts.lock().unwrap();
+        let puts = store.put_keys();
         assert!(puts.contains(&"index.html".to_string()), "index.html refreshed with empty process list");
         assert!(!puts.iter().any(|k| k.contains("active/latest")), "no product data uploaded");
     }
@@ -305,7 +511,7 @@ mod tests {
         assert_eq!((sum.checked, sum.changed, sum.failed), (1, 1, 1));
 
         // good was still processed despite bad failing first.
-        let puts = store.puts.lock().unwrap();
+        let puts = store.put_keys();
         assert!(
             puts.iter().any(|k| k == &good_key),
             "succeeding product after the failure must still be uploaded"

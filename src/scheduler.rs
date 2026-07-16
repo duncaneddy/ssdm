@@ -168,7 +168,7 @@ mod tests {
         let weekly = Product {
             category: "eop", source: "usno", name: "finals_test",
             url: "https://h/finals".into(), filename: "finals.all".into(),
-            content_type: "text/plain", availability: crate::products::Availability::Active, alias_name: None,
+            content_type: "text/plain", gunzip: false, availability: crate::products::Availability::Active, alias_name: None,
             info_url: None, cadence_label: None,
             schedule: Schedule::WeeklyAt {
                 weekday: Weekday::Thu,
