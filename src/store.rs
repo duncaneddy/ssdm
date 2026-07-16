@@ -16,11 +16,23 @@ const SIGN_TTL: Duration = Duration::from_secs(300);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Fail if the store goes this long without sending any response bytes.
 const READ_TIMEOUT: Duration = Duration::from_secs(30);
-/// Absolute ceiling for one request. This covers the *body upload*, so it must
-/// accommodate the largest product on a slow uplink: hip_main.dat is ~53 MB, and
-/// a 30s ceiling silently made a successful PUT contingent on having ~15 Mbit/s
-/// of upstream bandwidth.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
+/// Fixed allowance for any request, independent of body size.
+const REQUEST_BASE_TIMEOUT: Duration = Duration::from_secs(60);
+/// Pessimistic floor throughput used to budget upload time for a body. Well below
+/// any real uplink, so it never fails an upload that is genuinely progressing.
+const MIN_UPLOAD_BYTES_PER_SEC: u64 = 625_000; // 5 Mbit/s
+
+/// Ceiling for one request, sized to its body.
+///
+/// This is the only limit a stalled *upload* hits: `read_timeout` governs reading
+/// the response, not sending the body. A single flat ceiling would have to
+/// accommodate the largest product (Tycho-2, ~500 MB), which would then let a
+/// 4 KB `status.json` PUT hang for that same span and stall the sequential sync
+/// loop. Budgeting per body keeps small writes bounded in about a minute while
+/// still giving the catalog the time it legitimately needs on a slow uplink.
+fn request_timeout(body_len: usize) -> Duration {
+    REQUEST_BASE_TIMEOUT + Duration::from_secs(body_len as u64 / MIN_UPLOAD_BYTES_PER_SEC)
+}
 
 pub struct R2Store {
     bucket: Bucket,
@@ -45,10 +57,10 @@ impl R2Store {
         let bucket = Bucket::new(endpoint, url_style, cfg.bucket_name.clone(), cfg.bucket_region.clone())
             .map_err(|e| anyhow!("bucket init: {e}"))?;
         let creds = Credentials::new(cfg.bucket_access_key_id.clone(), cfg.bucket_secret_access_key.clone());
+        // No client-wide `timeout`: each request sets its own, sized to its body.
         let client = reqwest::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
             .read_timeout(READ_TIMEOUT)
-            .timeout(REQUEST_TIMEOUT)
             .build()?;
         Ok(Self { bucket, creds, client })
     }
@@ -66,11 +78,13 @@ impl Store for R2Store {
         action.headers_mut().insert("cache-control", cc);
         let url = action.sign(SIGN_TTL);
 
+        let timeout = request_timeout(bytes.len());
         let resp = self
             .client
             .put(url)
             .header("content-type", ct)
             .header("cache-control", cc)
+            .timeout(timeout)
             .body(bytes)
             .send()
             .await?;
@@ -90,7 +104,7 @@ impl Store for R2Store {
         let action: GetObject = self.bucket.get_object(Some(&self.creds), key);
         let url = action.sign(SIGN_TTL);
 
-        let resp = self.client.get(url).send().await?;
+        let resp = self.client.get(url).timeout(REQUEST_BASE_TIMEOUT).send().await?;
         let status = resp.status();
         if status == reqwest::StatusCode::NOT_FOUND {
             return Ok(None);
@@ -104,5 +118,23 @@ impl Store for R2Store {
             return Err(anyhow!("R2 GET {key} failed: {status} {body}"));
         }
         Ok(Some(resp.bytes().await?.to_vec()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn request_timeout_scales_with_body_but_stays_tight_for_small_writes() {
+        // A small write (status.json, index.html) must not inherit the ceiling the
+        // 500 MB catalog needs — it would stall the sequential sync loop.
+        assert_eq!(request_timeout(4_000), Duration::from_secs(60));
+        // Tycho-2 at ~500 MB gets a budget generous enough for a slow uplink.
+        let tycho = request_timeout(525_761_991);
+        assert!(
+            tycho >= Duration::from_secs(15 * 60) && tycho <= Duration::from_secs(30 * 60),
+            "500 MB budget was {tycho:?}"
+        );
     }
 }

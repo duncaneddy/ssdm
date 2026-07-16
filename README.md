@@ -18,8 +18,14 @@ Each product has its own cadence (daily EOP, weekly realizations, monthly
 availability checks for the fixed star catalogs). The daemon sleeps until the
 soonest product is due, syncs the due set sequentially, and persists
 `status.json` after each product (locally and to R2). Per-host rate limiting and
-a small stagger keep us polite to upstreams; failed downloads retry briefly
-in-run and otherwise wait for the product's next interval.
+a small stagger keep us polite to upstreams.
+
+Only a *successful* fetch consumes a product's interval. Failed downloads retry
+briefly in-run, then on a short cadence (`RETRY_MS` in `src/schedule.rs`) rather
+than waiting out the full interval — otherwise one transient failure on a monthly
+product would leave it stale for a month while the daemon sat idle. A product's
+content hash is likewise only recorded once its bytes are actually stored, so a
+failed upload is retried instead of being mistaken for "unchanged" forever.
 
 ## Product availability
 
@@ -146,18 +152,35 @@ dead host still fails fast. The largest product today
 The star catalogs are served as plain text under a uniform naming scheme, so
 both datasets are consumed identically:
 
-| Mirror path | Upstream |
-|---|---|
-| `star_catalog/cds/fk5/latest/FK5_Catalog.txt` | `ftp/I/149A/catalog.gz` (gunzipped) |
-| `star_catalog/cds/fk5/latest/FK5_Readme.txt` | `ftp/I/149A/ReadMe` |
-| `star_catalog/cds/hipparcos/latest/Hipparcos_Catalog.txt` | `ftp/cats/I/239/hip_main.dat` |
-| `star_catalog/cds/hipparcos/latest/Hipparcos_Readme.txt` | `ftp/cats/I/239/ReadMe` |
+| Mirror path | Size | Upstream |
+|---|---|---|
+| `star_catalog/cds/fk5/latest/FK5_Catalog.txt` | 293 KB | `ftp/I/149A/catalog.gz` (gunzipped) |
+| `star_catalog/cds/fk5/latest/FK5_Readme.txt` | 14 KB | `ftp/I/149A/ReadMe` |
+| `star_catalog/cds/hipparcos/latest/Hipparcos_Catalog.txt` | 53 MB | `ftp/cats/I/239/hip_main.dat` |
+| `star_catalog/cds/hipparcos/latest/Hipparcos_Readme.txt` | 69 KB | `ftp/cats/I/239/ReadMe` |
+| `star_catalog/cds/tycho2/latest/Tycho2_Catalog.txt` | 501 MB | `ftp/cats/I/259/tyc2.dat.00…19.gz` (20 parts, gunzipped and joined) |
+| `star_catalog/cds/tycho2/latest/Tycho2_Readme.txt` | 17 KB | `ftp/cats/I/259/ReadMe` |
 
-That uniformity costs one transform: CDS archives FK5 *only* as `catalog.gz` and
-Hipparcos *only* uncompressed, so products carrying `gunzip: true` are
-decompressed before being hashed and served (`decode_body` in `src/sync.rs`).
-The served bytes are the archive's contents, which is what each `ReadMe`'s
-fixed-width byte columns describe.
+That uniformity costs two transforms:
+
+- **Decompression.** CDS archives FK5 and Tycho-2 *only* gzipped and Hipparcos
+  *only* uncompressed, so products carrying `gunzip: true` are decompressed
+  before being hashed and served (`decode_body` in `src/sync.rs`). The served
+  bytes are the archive's contents, which is what each `ReadMe`'s fixed-width
+  byte columns describe.
+- **Joining.** CDS splits the Tycho-2 main catalog across 20 files. `Product.urls`
+  lists them in index order; `fetch_product` fetches each, decodes it, and
+  concatenates, so consumers get one file. Row order across parts is meaningful,
+  so the join order matters, and any part failing fails the whole product — a
+  silently short catalog would still parse.
+
+Tycho-2's supplements (`suppl_1`, `suppl_2`) are deliberately excluded: they use
+a different column layout, so appending them would put two incompatible record
+formats in one file.
+
+Note the memory cost. `Tycho2_Catalog.txt` is held in memory to be hashed and
+uploaded, so a refresh transiently needs ~500 MB+. `docker-compose.yml` sets no
+memory limit; if you add one, size it accordingly.
 
 Two upstream traps, both verified and both worth not rediscovering:
 

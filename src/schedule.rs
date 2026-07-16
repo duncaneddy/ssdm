@@ -28,21 +28,36 @@ pub enum Schedule {
     WeeklyAt { weekday: Weekday, time: Duration },
 }
 
-/// A failed weekly fetch retries on this cadence until it succeeds, rather than
-/// waiting a full week for the next anchor.
-const WEEKLY_RETRY_MS: u64 = 3_600_000; // 1 hour
+/// A failed fetch retries on this cadence until it succeeds, rather than waiting
+/// out the product's full interval.
+///
+/// This matters most for the longest intervals: without it, one transient
+/// failure on a 30-day star catalog — a dropped part, or a timed-out 500 MB
+/// upload — would leave that product stale for a further 30 days while the
+/// daemon sat idle, because a failed attempt is still an attempt.
+const RETRY_MS: u64 = 3_600_000; // 1 hour
+
+/// Did the most recent attempt succeed? `apply_update` stamps both `last_checked`
+/// and `last_attempt` on success, while `record_attempt` advances only
+/// `last_attempt`, so a failure leaves `last_checked` behind.
+fn last_attempt_succeeded(last_attempt: Option<u64>, last_checked: Option<u64>) -> bool {
+    match (last_attempt, last_checked) {
+        (Some(la), Some(lc)) => lc >= la,
+        _ => false,
+    }
+}
 
 impl Schedule {
     /// True when the product should be fetched at `now_ms`.
     ///
     /// `last_attempt` is the last fetch attempt (success or failure); `last_checked`
-    /// is the last *successful* download. Weekly schedules key due-ness off success
-    /// so a failed attempt does not mark the week done.
+    /// is the last *successful* download. Both schedule kinds key due-ness off
+    /// success, so a failed attempt does not consume the interval.
     pub fn is_due(&self, last_attempt: Option<u64>, last_checked: Option<u64>, now_ms: u64) -> bool {
         match self {
             Schedule::Every(interval) => match last_attempt {
                 None => true,
-                Some(t) => now_ms.saturating_sub(t) >= interval.as_millis() as u64,
+                Some(t) => now_ms.saturating_sub(t) >= every_wait_ms(*interval, last_attempt, last_checked),
             },
             Schedule::WeeklyAt { weekday, time } => {
                 let anchor = most_recent_anchor(*weekday, time.as_millis() as u64, now_ms);
@@ -53,7 +68,7 @@ impl Schedule {
                 // need a fetch this week: due on the first try, then retry on a backoff.
                 match last_attempt {
                     None => true,
-                    Some(t) => now_ms.saturating_sub(t) >= WEEKLY_RETRY_MS,
+                    Some(t) => now_ms.saturating_sub(t) >= RETRY_MS,
                 }
             }
         }
@@ -64,9 +79,8 @@ impl Schedule {
         match self {
             Schedule::Every(interval) => match last_attempt {
                 None => 0,
-                Some(t) => {
-                    (interval.as_millis() as u64).saturating_sub(now_ms.saturating_sub(t))
-                }
+                Some(t) => every_wait_ms(*interval, last_attempt, last_checked)
+                    .saturating_sub(now_ms.saturating_sub(t)),
             },
             Schedule::WeeklyAt { weekday, time } => {
                 let anchor = most_recent_anchor(*weekday, time.as_millis() as u64, now_ms);
@@ -77,7 +91,7 @@ impl Schedule {
                 // need a fetch: due now on the first try, else count down the retry backoff.
                 match last_attempt {
                     None => 0,
-                    Some(t) => (t + WEEKLY_RETRY_MS).saturating_sub(now_ms),
+                    Some(t) => (t + RETRY_MS).saturating_sub(now_ms),
                 }
             }
         }
@@ -89,6 +103,18 @@ impl Schedule {
             Schedule::Every(d) => *d,
             Schedule::WeeklyAt { .. } => Duration::from_secs(WEEK_MS / 1000),
         }
+    }
+}
+
+/// How long an `Every` product waits before its next attempt: its full interval
+/// after a success, or the shorter retry cadence after a failure. Capped by the
+/// interval so a sub-hour product is never slowed down by the retry floor.
+fn every_wait_ms(interval: Duration, last_attempt: Option<u64>, last_checked: Option<u64>) -> u64 {
+    let interval_ms = interval.as_millis() as u64;
+    if last_attempt_succeeded(last_attempt, last_checked) {
+        interval_ms
+    } else {
+        RETRY_MS.min(interval_ms)
     }
 }
 
@@ -129,6 +155,40 @@ mod tests {
         assert!(s.is_due(None, None, 1000), "absent => due");
         assert!(!s.is_due(Some(1000), None, 1000 + 59_000), "before interval => not due");
         assert!(s.is_due(Some(1000), None, 1000 + 60_000), "at interval => due");
+    }
+
+    #[test]
+    fn every_retries_a_failure_instead_of_waiting_out_a_long_interval() {
+        // The star catalogs poll monthly. A failed attempt is still an attempt, so
+        // keying purely off last_attempt would park a failed 500 MB upload for a
+        // further 30 days with the daemon idle. A failure must retry on the short
+        // cadence; only a success consumes the interval.
+        let monthly = Schedule::Every(Duration::from_secs(30 * 24 * 3600));
+        let t = 1_000_000_000_000;
+
+        // Attempted at t, never succeeded (record_attempt leaves last_checked behind).
+        assert!(!monthly.is_due(Some(t), Some(0), t + RETRY_MS - 1), "retry not yet due");
+        assert!(
+            monthly.is_due(Some(t), Some(0), t + RETRY_MS),
+            "a failed attempt retries within the hour, not in 30 days"
+        );
+        assert_eq!(monthly.remaining_ms(Some(t), Some(0), t), RETRY_MS);
+
+        // Succeeded at t: the interval applies in full.
+        let month = 30 * DAY;
+        assert!(!monthly.is_due(Some(t), Some(t), t + month - 1), "success consumes the interval");
+        assert!(monthly.is_due(Some(t), Some(t), t + month));
+        assert_eq!(monthly.remaining_ms(Some(t), Some(t), t), month);
+    }
+
+    #[test]
+    fn every_retry_floor_never_slows_a_short_interval() {
+        // The retry cadence is a ceiling on waiting, not a floor: a product that
+        // polls faster than the retry interval keeps its own cadence after a failure.
+        let fast = Schedule::Every(Duration::from_secs(60));
+        let t = 1_000_000_000_000;
+        assert!(fast.is_due(Some(t), Some(0), t + 60_000), "still due at its own 60s interval");
+        assert_eq!(fast.remaining_ms(Some(t), Some(0), t), 60_000);
     }
 
     #[test]
@@ -177,7 +237,7 @@ mod tests {
             "should back off briefly, not hammer"
         );
         // After the retry backoff elapses: due again despite last_attempt > anchor.
-        let now = failed_at + WEEKLY_RETRY_MS;
+        let now = failed_at + RETRY_MS;
         assert!(
             weekly_thu().is_due(Some(failed_at), Some(THU_1815), now),
             "a failed weekly fetch must be retried, not skipped until next week"
@@ -191,7 +251,7 @@ mod tests {
         let now = failed_at + 60_000; // 1 min after the failed attempt
         assert_eq!(
             weekly_thu().remaining_ms(Some(failed_at), Some(THU_1815), now),
-            WEEKLY_RETRY_MS - 60_000,
+            RETRY_MS - 60_000,
             "remaining counts down the retry backoff, not a full week"
         );
     }

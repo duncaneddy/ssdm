@@ -100,17 +100,18 @@ pub async fn run_sync<F: Fetcher, S: Store>(
 
     for p in process {
         let key = object_key(p);
-        rate.throttle(&p.url).await;
-        // A corrupt archive is treated exactly like a failed download: the prior
-        // object and its status stay intact, and the product's interval is the retry.
-        match fetcher.fetch(&p.url).await.and_then(|b| decode_body(p, b)) {
+        // A corrupt archive, or any one part of a multi-part product, failing is
+        // treated exactly like a failed download: the prior object and its status
+        // stay intact, and the product's interval is the retry.
+        match fetch_product(p, fetcher, rate).await {
             Ok(bytes) => {
                 summary.checked += 1;
                 let hash = content_hash(&bytes);
+                let size = bytes.len() as u64;
                 let is_current = status.get(&key).map(|e| e.hash == hash).unwrap_or(false);
                 if is_current {
                     // Bytes already in the bucket: record the successful check only.
-                    apply_update(&mut status, &key, &hash, bytes.len() as u64, now_ms);
+                    apply_update(&mut status, &key, &hash, size, now_ms);
                     info!("unchanged {key}");
                 } else {
                     // Commit the hash to status ONLY after the bytes are stored.
@@ -118,11 +119,11 @@ pub async fn run_sync<F: Fetcher, S: Store>(
                     // content, conclude "unchanged", and never retry — leaving the
                     // object missing while the daemon reports success. For a static
                     // catalog, nothing upstream would ever dislodge that.
-                    match persist_bytes(store, data_dir, p, &key, &bytes).await {
+                    match persist_bytes(store, data_dir, p, &key, bytes).await {
                         Ok(()) => {
-                            apply_update(&mut status, &key, &hash, bytes.len() as u64, now_ms);
+                            apply_update(&mut status, &key, &hash, size, now_ms);
                             summary.changed += 1;
-                            info!("updated {key} ({} bytes)", bytes.len());
+                            info!("updated {key} ({size} bytes)");
                         }
                         Err(e) => {
                             summary.failed += 1;
@@ -154,7 +155,51 @@ pub async fn run_sync<F: Fetcher, S: Store>(
     summary
 }
 
-/// Decompress a gzip-archived product so it is stored, hashed, and served in the
+/// Fetch every part of a product, in order, and concatenate them into the single
+/// object we serve.
+///
+/// Ordering is the correctness property for a split catalog: Tycho-2's rows are
+/// ordered across `tyc2.dat.00` … `.19`, so the parts must be joined in registry
+/// order, and any part failing must fail the whole product rather than yield a
+/// silently short catalog.
+///
+/// Each part is decoded as it arrives so only one compressed part is held at a
+/// time on top of the accumulated output.
+async fn fetch_product<F: Fetcher>(
+    p: &Product,
+    fetcher: &F,
+    rate: &mut RateLimiter,
+) -> anyhow::Result<Vec<u8>> {
+    let mut out: Vec<u8> = Vec::new();
+    for (i, url) in p.urls.iter().enumerate() {
+        rate.throttle(url).await;
+        let raw = fetcher
+            .fetch(url)
+            .await
+            .with_context(|| format!("part {}/{}: {url}", i + 1, p.urls.len()))?;
+        let decoded = decode_body(p, raw, url)?;
+        if out.is_empty() {
+            // Adopt the first part rather than copying it — this is the whole
+            // buffer for a single-part product. Concatenating onto an empty
+            // accumulator is the identity, so adopting is equivalent to extending
+            // even if a part is legitimately empty.
+            out = decoded;
+            // Parts of a split catalog are near-uniform in size, so the first one
+            // predicts the rest. Reserving up front keeps peak memory bounded and
+            // predictable instead of letting repeated growth hold an old
+            // allocation and its larger replacement at ~500 MB scale.
+            let remaining = p.urls.len().saturating_sub(1);
+            if remaining > 0 {
+                out.reserve(out.len().saturating_mul(remaining));
+            }
+        } else {
+            out.extend_from_slice(&decoded);
+        }
+    }
+    Ok(out)
+}
+
+/// Decompress a gzip-archived part so it is stored, hashed, and served in the
 /// plain-text form its ReadMe documents. Change detection therefore keys off the
 /// bytes we actually serve, not the archive envelope.
 ///
@@ -164,7 +209,7 @@ pub async fn run_sync<F: Fetcher, S: Store>(
 /// failure modes would serve a plausible-looking partial catalog. (This is not a
 /// hypothetical shape for CDS — VizieR's own txt.gz endpoint returns a gzip
 /// member followed by an uncompressed copy of the same table.)
-fn decode_body(p: &Product, bytes: Vec<u8>) -> anyhow::Result<Vec<u8>> {
+fn decode_body(p: &Product, bytes: Vec<u8>, url: &str) -> anyhow::Result<Vec<u8>> {
     use std::io::Read;
 
     if !p.gunzip {
@@ -173,23 +218,29 @@ fn decode_body(p: &Product, bytes: Vec<u8>) -> anyhow::Result<Vec<u8>> {
     let mut out = Vec::new();
     flate2::read::MultiGzDecoder::new(&bytes[..])
         .read_to_end(&mut out)
-        .with_context(|| format!("gunzip {} ({} bytes)", p.url, bytes.len()))?;
+        .with_context(|| format!("gunzip {url} ({} bytes)", bytes.len()))?;
     Ok(out)
 }
 
+/// Write the product locally and to the bucket.
+///
+/// Takes ownership so the primary upload can move the buffer instead of copying
+/// it. At the scale of the largest product (Tycho-2, ~500 MB) a `to_vec()` here
+/// doubles the daemon's peak memory for no benefit. Only an aliased product —
+/// which is uploaded twice by definition — pays for a clone.
 async fn persist_bytes<S: Store>(
     store: &S,
     data_dir: &Path,
     p: &Product,
     key: &str,
-    bytes: &[u8],
+    bytes: Vec<u8>,
 ) -> anyhow::Result<()> {
-    write_mirror(data_dir, key, bytes)?;
-    store.put(key, bytes.to_vec(), p.content_type, DATA_CACHE).await?;
+    write_mirror(data_dir, key, &bytes)?;
     if let Some(akey) = alias_key(p) {
-        write_mirror(data_dir, &akey, bytes)?;
-        store.put(&akey, bytes.to_vec(), p.content_type, DATA_CACHE).await?;
+        write_mirror(data_dir, &akey, &bytes)?;
+        store.put(&akey, bytes.clone(), p.content_type, DATA_CACHE).await?;
     }
+    store.put(key, bytes, p.content_type, DATA_CACHE).await?;
     Ok(())
 }
 
@@ -247,7 +298,7 @@ mod tests {
     fn product(name: &str, url: &str) -> Product {
         Product {
             category: "catalog", source: "celestrak", name: Box::leak(name.to_string().into_boxed_str()),
-            url: url.into(), filename: format!("{name}.json"),
+            urls: vec![url.into()], filename: format!("{name}.json"),
             content_type: "application/json", gunzip: false, availability: crate::products::Availability::Active, alias_name: None,
             info_url: None, cadence_label: None,
             schedule: Schedule::Every(Duration::from_secs(3600)),
@@ -338,7 +389,7 @@ mod tests {
         let mut junk = gzipped(b"REAL");
         junk.extend_from_slice(b"TRAILING JUNK");
         assert!(
-            decode_body(&p, junk).is_err(),
+            decode_body(&p, junk, "https://h/catalog.gz").is_err(),
             "trailing junk must not be silently discarded"
         );
 
@@ -346,7 +397,7 @@ mod tests {
         // truncated to its first member — that would serve a partial catalog.
         let mut two = gzipped(b"FIRST");
         two.extend_from_slice(&gzipped(b"SECOND"));
-        assert_eq!(decode_body(&p, two).unwrap(), b"FIRSTSECOND");
+        assert_eq!(decode_body(&p, two, "https://h/catalog.gz").unwrap(), b"FIRSTSECOND");
     }
 
     #[tokio::test]
@@ -365,6 +416,104 @@ mod tests {
         run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), "example.org", 1000).await;
         let written = std::fs::read(dir.path().join(crate::keys::object_key(&p))).unwrap();
         assert_eq!(written, body, "gunzip: false must not decode anything");
+    }
+
+    fn multipart_product(urls: &[&str], gunzip: bool) -> Product {
+        Product {
+            category: "star_catalog", source: "cds", name: "tycho2",
+            urls: urls.iter().map(|u| u.to_string()).collect(),
+            filename: "Tycho2_Catalog.txt".into(),
+            content_type: "text/plain", gunzip,
+            availability: crate::products::Availability::Active, alias_name: None,
+            info_url: None, cadence_label: None,
+            schedule: Schedule::Every(Duration::from_secs(3600)),
+        }
+    }
+
+    #[tokio::test]
+    async fn multipart_product_is_joined_in_registry_order() {
+        // Tycho-2's rows run in sequence across tyc2.dat.00 … .19, so the served
+        // file is only correct if the parts are concatenated in that exact order.
+        let dir = tempfile::tempdir().unwrap();
+        let p = multipart_product(&["https://h/p0", "https://h/p1", "https://h/p2"], true);
+        let all = vec![multipart_product(&["https://h/p0", "https://h/p1", "https://h/p2"], true)];
+        let mut out = HashMap::new();
+        out.insert("https://h/p0".to_string(), Some(gzipped(b"AAA\n")));
+        out.insert("https://h/p1".to_string(), Some(gzipped(b"BBB\n")));
+        out.insert("https://h/p2".to_string(), Some(gzipped(b"CCC\n")));
+        let fetcher = FakeFetcher { out };
+        let store = FakeStore::default();
+        let mut rate = RateLimiter::new(Duration::ZERO, Duration::ZERO);
+
+        let sum = run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), "example.org", 1000).await;
+        assert_eq!((sum.checked, sum.changed, sum.failed), (1, 1, 0));
+
+        let key = crate::keys::object_key(&p);
+        assert_eq!(
+            store.body_of(&key).expect("uploaded"),
+            b"AAA\nBBB\nCCC\n",
+            "parts must be joined in order, each decompressed"
+        );
+        // 3 upstream parts collapse to exactly ONE served object.
+        assert_eq!(
+            store.put_keys().iter().filter(|k| k.contains("tycho2/latest")).count(),
+            1,
+            "a multi-part product is served as a single file"
+        );
+        let st = crate::local::load_status(dir.path());
+        assert_eq!(st[&key].size, 12, "status size is the joined length");
+    }
+
+    #[tokio::test]
+    async fn empty_parts_do_not_disturb_the_join() {
+        // fetch_product adopts the first part instead of copying it. That is only
+        // sound because concatenating onto an empty buffer is the identity — so an
+        // empty leading (or interior) part must not shift or drop anything.
+        let dir = tempfile::tempdir().unwrap();
+        let p = multipart_product(&["https://h/p0", "https://h/p1", "https://h/p2"], false);
+        let all = vec![multipart_product(&["https://h/p0", "https://h/p1", "https://h/p2"], false)];
+        let mut out = HashMap::new();
+        out.insert("https://h/p0".to_string(), Some(Vec::new())); // empty first part
+        out.insert("https://h/p1".to_string(), Some(b"BBB\n".to_vec()));
+        out.insert("https://h/p2".to_string(), Some(Vec::new())); // empty interior part
+        let fetcher = FakeFetcher { out };
+        let store = FakeStore::default();
+        let mut rate = RateLimiter::new(Duration::ZERO, Duration::ZERO);
+
+        run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), "example.org", 1000).await;
+        assert_eq!(
+            store.body_of(&crate::keys::object_key(&p)).expect("uploaded"),
+            b"BBB\n",
+            "empty parts contribute nothing and shift nothing"
+        );
+    }
+
+    #[tokio::test]
+    async fn one_bad_part_fails_the_whole_product() {
+        // A short catalog is worse than no update: it looks valid and parses fine.
+        // If any part fails, nothing may be uploaded.
+        let dir = tempfile::tempdir().unwrap();
+        let p = multipart_product(&["https://h/p0", "https://h/p1", "https://h/p2"], true);
+        let all = vec![multipart_product(&["https://h/p0", "https://h/p1", "https://h/p2"], true)];
+        let key = crate::keys::object_key(&p);
+
+        let mut out = HashMap::new();
+        out.insert("https://h/p0".to_string(), Some(gzipped(b"AAA\n")));
+        out.insert("https://h/p1".to_string(), None); // middle part unavailable
+        out.insert("https://h/p2".to_string(), Some(gzipped(b"CCC\n")));
+        let fetcher = FakeFetcher { out };
+        let store = FakeStore::default();
+        let mut rate = RateLimiter::new(Duration::ZERO, Duration::ZERO);
+
+        let sum = run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), "example.org", 1000).await;
+        assert_eq!((sum.checked, sum.changed, sum.failed), (0, 0, 1));
+        assert!(
+            !store.put_keys().iter().any(|k| k == &key),
+            "a partial join must never be uploaded"
+        );
+        let st = crate::local::load_status(dir.path());
+        assert_eq!(st[&key].hash, "", "no content recorded for a failed join");
+        assert_eq!(st[&key].last_attempt, 1000);
     }
 
     #[tokio::test]

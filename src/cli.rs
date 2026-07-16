@@ -102,7 +102,7 @@ mod tests {
     fn test_product(name: &'static str, availability: Availability) -> Product {
         Product {
             category: "catalog", source: "celestrak", name,
-            url: format!("https://h/{name}"), filename: format!("{name}.json"),
+            urls: vec![format!("https://h/{name}")], filename: format!("{name}.json"),
             content_type: "application/json", gunzip: false, availability, alias_name: None,
             info_url: None, cadence_label: None,
             schedule: Schedule::Every(Duration::from_secs(3600)),

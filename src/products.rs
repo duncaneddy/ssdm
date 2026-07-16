@@ -20,6 +20,14 @@ pub enum Availability {
     Disabled,
 }
 
+impl Product {
+    /// The source shown on the landing page and used for host-level identity.
+    /// Multi-part products are all one host, so the first URL represents them.
+    pub fn primary_url(&self) -> &str {
+        &self.urls[0]
+    }
+}
+
 impl Availability {
     /// Fetched on its schedule by the daemon and by `sync --all`.
     pub fn is_fetched(self) -> bool {
@@ -37,7 +45,10 @@ pub struct Product {
     pub category: &'static str,    // e.g. "eop", "space_weather", "star_catalog"
     pub source: &'static str,      // e.g. "iers", "celestrak", "cds"
     pub name: &'static str,        // public path segment (a dataset may span several files)
-    pub url: String,               // upstream HTTPS source
+    /// Upstream sources, fetched in order and concatenated into the single served
+    /// object. Exactly one element for every product except Tycho-2, whose main
+    /// catalog CDS splits across 20 files.
+    pub urls: Vec<String>,
     pub filename: String,          // stable served filename
     pub content_type: &'static str,
     /// Upstream serves this file gzip-archived; decompress it before serving so
@@ -64,8 +75,12 @@ const CELESTRAK_GROUPS: &[&str] = &[
 /// back to `Active` to resume the whole provider in one edit.
 const CELESTRAK: Availability = Availability::Disabled;
 
-/// FK5 and Hipparcos are frozen historical artifacts (published 1993 and 1997),
-/// so this cadence is an availability check rather than a change check.
+/// Number of files CDS splits the Tycho-2 main catalog across (tyc2.dat.00 … .19).
+const TYCHO2_PARTS: u32 = 20;
+
+/// The star catalogs are frozen historical artifacts (FK5 1993, Hipparcos 1997,
+/// Tycho-2 2000), so this cadence is an availability check rather than a change
+/// check.
 const STAR_CATALOG_CHECK: Schedule = Schedule::Every(Duration::from_secs(30 * 24 * 3600));
 
 /// Build the full registry: fixed EOP/SW/star-catalog entries + generated
@@ -74,7 +89,7 @@ pub fn products() -> Vec<Product> {
     let mut items = vec![
         Product {
             category: "eop", source: "iers", name: "finals_all",
-            url: "https://datacenter.iers.org/data/latestVersion/finals.all.iau2000.txt".into(),
+            urls: vec!["https://datacenter.iers.org/data/latestVersion/finals.all.iau2000.txt".into()],
             filename: "finals.all.iau2000.txt".into(),
             content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: None,
             info_url: Some("https://www.iers.org/IERS/EN/DataProducts/EarthOrientationData/eop.html"),
@@ -83,7 +98,7 @@ pub fn products() -> Vec<Product> {
         },
         Product {
             category: "eop", source: "iers", name: "c04_20u24",
-            url: "https://datacenter.iers.org/data/latestVersion/EOP_20u24_C04_one_file_1962-now.txt".into(),
+            urls: vec!["https://datacenter.iers.org/data/latestVersion/EOP_20u24_C04_one_file_1962-now.txt".into()],
             filename: "EOP_C04_one_file_1962-now.txt".into(),
             content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: Some("c04"),
             info_url: Some("https://www.iers.org/IERS/EN/DataProducts/EarthOrientationData/eop.html"),
@@ -92,7 +107,7 @@ pub fn products() -> Vec<Product> {
         },
         Product {
             category: "eop", source: "usno", name: "finals2000a_all",
-            url: "https://maia.usno.navy.mil/ser7/finals2000A.all".into(),
+            urls: vec!["https://maia.usno.navy.mil/ser7/finals2000A.all".into()],
             filename: "finals2000A.all".into(),
             content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: None,
             info_url: Some("https://maia.usno.navy.mil/ser7/readme"),
@@ -104,7 +119,7 @@ pub fn products() -> Vec<Product> {
         },
         Product {
             category: "eop", source: "usno", name: "finals2000a_daily",
-            url: "https://maia.usno.navy.mil/ser7/finals2000A.daily".into(),
+            urls: vec!["https://maia.usno.navy.mil/ser7/finals2000A.daily".into()],
             filename: "finals2000A.daily".into(),
             content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: None,
             info_url: Some("https://maia.usno.navy.mil/ser7/readme"),
@@ -113,7 +128,7 @@ pub fn products() -> Vec<Product> {
         },
         Product {
             category: "eop", source: "obspm", name: "c04_1962now",
-            url: "https://hpiers.obspm.fr/iers/eop/eopc04/eopc04.1962-now".into(),
+            urls: vec!["https://hpiers.obspm.fr/iers/eop/eopc04/eopc04.1962-now".into()],
             filename: "eopc04.1962-now".into(),
             content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: None,
             info_url: Some("https://hpiers.obspm.fr/iers/eop/eopc04/readme"),
@@ -122,7 +137,7 @@ pub fn products() -> Vec<Product> {
         },
         Product {
             category: "space_weather", source: "celestrak", name: "sw_all",
-            url: "https://celestrak.org/SpaceData/sw19571001.txt".into(),
+            urls: vec!["https://celestrak.org/SpaceData/sw19571001.txt".into()],
             filename: "sw19571001.txt".into(),
             content_type: "text/plain", gunzip: false, availability: CELESTRAK, alias_name: None,
             info_url: Some("https://celestrak.org/SpaceData/"),
@@ -137,41 +152,63 @@ pub fn products() -> Vec<Product> {
     // includes the filename, so they do not collide.
     //
     // Every file is served as plain text under a uniform
-    // <Dataset>_Catalog.txt / <Dataset>_Readme.txt name, so the two datasets are
-    // consumed identically. That uniformity is not free upstream: CDS archives
-    // FK5 only as catalog.gz and Hipparcos only uncompressed, so FK5 is
-    // gunzipped here. VizieR's nph-Cat/txt endpoint is deliberately not used as
-    // a plain-text shortcut — it re-renders the table with a column-ruler header
-    // and does not reproduce the archive bytes the ReadMe describes.
+    // <Dataset>_Catalog.txt / <Dataset>_Readme.txt name, so all three datasets are
+    // consumed identically. That uniformity is not free upstream: CDS archives FK5
+    // and Tycho-2 only gzipped and Hipparcos only uncompressed, and it splits the
+    // Tycho-2 catalog across 20 files. VizieR's nph-Cat/txt endpoint is
+    // deliberately not used as a plain-text shortcut — it re-renders the table
+    // with a column-ruler header and does not reproduce the archive bytes the
+    // ReadMe describes.
+    //
+    // Order here is the display order on the landing page: each catalog followed
+    // by its ReadMe.
     //
     // Host note: cdsarc.u-strasbg.fr serves the same bytes but presents a
     // self-signed certificate, so only cdsarc.cds.unistra.fr works over https.
-    for (name, filename, path, gunzip, info_url) in [
-        ("fk5", "FK5_Catalog.txt", "I/149A/catalog.gz", true,
-            "https://cdsarc.cds.unistra.fr/viz-bin/cat/I/149A"),
-        ("fk5", "FK5_Readme.txt", "I/149A/ReadMe", false,
-            "https://cdsarc.cds.unistra.fr/viz-bin/cat/I/149A"),
-        ("hipparcos", "Hipparcos_Catalog.txt", "cats/I/239/hip_main.dat", false,
-            "https://cdsarc.cds.unistra.fr/viz-bin/cat/I/239"),
-        ("hipparcos", "Hipparcos_Readme.txt", "cats/I/239/ReadMe", false,
-            "https://cdsarc.cds.unistra.fr/viz-bin/cat/I/239"),
-    ] {
-        items.push(Product {
-            category: "star_catalog", source: "cds", name,
-            url: format!("https://cdsarc.cds.unistra.fr/ftp/{path}"),
-            filename: filename.into(),
-            content_type: "text/plain", gunzip,
-            availability: Availability::Active, alias_name: None,
-            info_url: Some(info_url),
-            cadence_label: None,
-            schedule: STAR_CATALOG_CHECK,
-        });
-    }
+    const FK5_INFO: &str = "https://cdsarc.cds.unistra.fr/viz-bin/cat/I/149A";
+    const HIP_INFO: &str = "https://cdsarc.cds.unistra.fr/viz-bin/cat/I/239";
+    const TYC_INFO: &str = "https://cdsarc.cds.unistra.fr/viz-bin/cat/I/259";
+
+    let cds_file = |name, filename: &str, path: &str, gunzip, info_url| Product {
+        category: "star_catalog", source: "cds", name,
+        urls: vec![format!("https://cdsarc.cds.unistra.fr/ftp/{path}")],
+        filename: filename.into(),
+        content_type: "text/plain", gunzip,
+        availability: Availability::Active, alias_name: None,
+        info_url: Some(info_url),
+        cadence_label: None,
+        schedule: STAR_CATALOG_CHECK,
+    };
+
+    items.push(cds_file("fk5", "FK5_Catalog.txt", "I/149A/catalog.gz", true, FK5_INFO));
+    items.push(cds_file("fk5", "FK5_Readme.txt", "I/149A/ReadMe", false, FK5_INFO));
+    items.push(cds_file("hipparcos", "Hipparcos_Catalog.txt", "cats/I/239/hip_main.dat", false, HIP_INFO));
+    items.push(cds_file("hipparcos", "Hipparcos_Readme.txt", "cats/I/239/ReadMe", false, HIP_INFO));
+
+    // Tycho-2 main catalog. CDS splits it across 20 gzipped parts of ~26 MB each
+    // (~501 MB in total); they are fetched in index order and concatenated into
+    // one file, because a split catalog is not what a consumer wants to reassemble
+    // and the row order across parts is meaningful. The supplements (suppl_1,
+    // suppl_2) are deliberately excluded: they use a different column layout, so
+    // appending them would put two incompatible record formats in one file.
+    items.push(Product {
+        category: "star_catalog", source: "cds", name: "tycho2",
+        urls: (0..TYCHO2_PARTS)
+            .map(|i| format!("https://cdsarc.cds.unistra.fr/ftp/cats/I/259/tyc2.dat.{i:02}.gz"))
+            .collect(),
+        filename: "Tycho2_Catalog.txt".into(),
+        content_type: "text/plain", gunzip: true,
+        availability: Availability::Active, alias_name: None,
+        info_url: Some(TYC_INFO),
+        cadence_label: None,
+        schedule: STAR_CATALOG_CHECK,
+    });
+    items.push(cds_file("tycho2", "Tycho2_Readme.txt", "cats/I/259/ReadMe", false, TYC_INFO));
 
     for slug in CELESTRAK_GROUPS {
         items.push(Product {
             category: "catalog", source: "celestrak", name: slug,
-            url: format!("https://celestrak.org/NORAD/elements/gp.php?GROUP={slug}&FORMAT=json"),
+            urls: vec![format!("https://celestrak.org/NORAD/elements/gp.php?GROUP={slug}&FORMAT=json")],
             filename: format!("{slug}.json"),
             content_type: "application/json", gunzip: false, availability: CELESTRAK, alias_name: None,
             info_url: Some("https://celestrak.org/NORAD/documentation/gp-data-formats.php"),
@@ -183,10 +220,17 @@ pub fn products() -> Vec<Product> {
     items
 }
 
-/// Enforce: at most one fetched product per (category, source, alias_name).
+/// Enforce registry invariants: every product has at least one source, and at
+/// most one fetched product claims each (category, source, alias_name).
 pub fn validate_registry(items: &[Product]) -> Result<(), String> {
     let mut seen: HashSet<(&str, &str, &str)> = HashSet::new();
     for p in items {
+        // `primary_url` indexes urls[0], and a product with no source could never
+        // be fetched anyway — fail loudly at startup rather than panicking while
+        // rendering the landing page.
+        if p.urls.is_empty() {
+            return Err(format!("product has no urls: {}/{}/{}", p.category, p.source, p.name));
+        }
         if !p.availability.is_fetched() {
             continue;
         }
@@ -220,11 +264,11 @@ mod tests {
         // A superseded realization keeps its alias-free entry, but even if two
         // non-fetched products collided on an alias, nothing would fetch them.
         let items = vec![
-            Product { category: "eop", source: "iers", name: "c04_old", url: "u".into(),
+            Product { category: "eop", source: "iers", name: "c04_old", urls: vec!["u".into()],
                 filename: "f".into(), content_type: "text/plain", gunzip: false, availability: Availability::Frozen,
                 alias_name: Some("c04"), info_url: None, cadence_label: None,
                 schedule: Schedule::Every(Duration::from_secs(3600)) },
-            Product { category: "eop", source: "iers", name: "c04_new", url: "u".into(),
+            Product { category: "eop", source: "iers", name: "c04_new", urls: vec!["u".into()],
                 filename: "f".into(), content_type: "text/plain", gunzip: false, availability: Availability::Active,
                 alias_name: Some("c04"), info_url: None, cadence_label: None,
                 schedule: Schedule::Every(Duration::from_secs(3600)) },
@@ -240,7 +284,7 @@ mod tests {
             .filter(|p| p.availability.is_fetched())
             .map(|p| p.category)
             .collect();
-        assert_eq!(fetched.len(), 9, "5 EOP + 4 star catalog files");
+        assert_eq!(fetched.len(), 11, "5 EOP + 6 star catalog files");
         assert!(
             fetched.iter().all(|c| *c == "eop" || *c == "star_catalog"),
             "no other category is fetched while CelesTrak is disabled: {fetched:?}"
@@ -263,7 +307,7 @@ mod tests {
     fn star_catalog_products_are_present() {
         let items = products();
         let cds: Vec<&Product> = items.iter().filter(|p| p.category == "star_catalog").collect();
-        assert_eq!(cds.len(), 4);
+        assert_eq!(cds.len(), 6, "three catalogs, each with its ReadMe");
 
         let keyed = |filename: &str| -> &Product {
             cds.iter()
@@ -273,12 +317,12 @@ mod tests {
 
         let fk5 = keyed("FK5_Catalog.txt");
         assert_eq!(fk5.source, "cds");
-        assert_eq!(fk5.url, "https://cdsarc.cds.unistra.fr/ftp/I/149A/catalog.gz");
+        assert_eq!(fk5.primary_url(), "https://cdsarc.cds.unistra.fr/ftp/I/149A/catalog.gz");
         assert_eq!(crate::keys::object_key(fk5), "star_catalog/cds/fk5/latest/FK5_Catalog.txt");
         assert!(fk5.gunzip, "CDS archives FK5 only as .gz; we serve the plain text it contains");
 
         let hip = keyed("Hipparcos_Catalog.txt");
-        assert_eq!(hip.url, "https://cdsarc.cds.unistra.fr/ftp/cats/I/239/hip_main.dat");
+        assert_eq!(hip.primary_url(), "https://cdsarc.cds.unistra.fr/ftp/cats/I/239/hip_main.dat");
         assert_eq!(
             crate::keys::object_key(hip),
             "star_catalog/cds/hipparcos/latest/Hipparcos_Catalog.txt"
@@ -289,22 +333,67 @@ mod tests {
         for (filename, url) in [
             ("FK5_Readme.txt", "https://cdsarc.cds.unistra.fr/ftp/I/149A/ReadMe"),
             ("Hipparcos_Readme.txt", "https://cdsarc.cds.unistra.fr/ftp/cats/I/239/ReadMe"),
+            ("Tycho2_Readme.txt", "https://cdsarc.cds.unistra.fr/ftp/cats/I/259/ReadMe"),
         ] {
             let readme = keyed(filename);
-            assert_eq!(readme.url, url);
+            assert_eq!(readme.primary_url(), url);
             assert!(!readme.gunzip);
         }
+
+        // Tycho-2's main catalog is split across 20 gzipped parts upstream and
+        // must be served as one concatenated file, in index order — the row order
+        // across parts is meaningful, so a shuffled or short join is a real defect.
+        let tyc = keyed("Tycho2_Catalog.txt");
+        assert_eq!(tyc.name, "tycho2");
+        assert!(tyc.gunzip, "every part is gzipped");
+        assert_eq!(tyc.urls.len(), 20, "tyc2.dat.00 … .19");
+        assert_eq!(
+            crate::keys::object_key(tyc),
+            "star_catalog/cds/tycho2/latest/Tycho2_Catalog.txt",
+            "20 upstream parts, one served object"
+        );
+        let expected: Vec<String> = (0..20)
+            .map(|i| format!("https://cdsarc.cds.unistra.fr/ftp/cats/I/259/tyc2.dat.{i:02}.gz"))
+            .collect();
+        assert_eq!(tyc.urls, expected, "parts are listed in ascending index order");
+        assert!(
+            !tyc.urls.iter().any(|u| u.contains("suppl_")),
+            "supplements use a different column layout and must not be concatenated in"
+        );
 
         for p in &cds {
             assert_eq!(p.availability, Availability::Active, "{} active", p.filename);
             assert_eq!(p.schedule, Schedule::Every(Duration::from_secs(30 * 24 * 3600)));
-            assert!(p.url.starts_with("https://cdsarc.cds.unistra.fr/"),
-                "cdsarc.u-strasbg.fr serves a self-signed cert over https: {}", p.url);
+            assert!(!p.urls.is_empty(), "{} has at least one source", p.filename);
+            for u in &p.urls {
+                assert!(u.starts_with("https://cdsarc.cds.unistra.fr/"),
+                    "cdsarc.u-strasbg.fr serves a self-signed cert over https: {u}");
+            }
             // The point of the naming/format scheme: both datasets are consumed
             // identically, regardless of how CDS happens to archive each one.
             assert_eq!(p.content_type, "text/plain", "{} is served as plain text", p.filename);
             assert!(p.filename.ends_with(".txt"), "{} has a uniform .txt name", p.filename);
         }
+    }
+
+    #[test]
+    fn star_catalogs_are_listed_catalog_then_readme() {
+        // Registry order is display order on the landing page; each catalog should
+        // be followed by its own ReadMe rather than the pairs being interleaved.
+        let items = products();
+        let names: Vec<&str> = items
+            .iter()
+            .filter(|p| p.category == "star_catalog")
+            .map(|p| p.filename.as_str())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "FK5_Catalog.txt", "FK5_Readme.txt",
+                "Hipparcos_Catalog.txt", "Hipparcos_Readme.txt",
+                "Tycho2_Catalog.txt", "Tycho2_Readme.txt",
+            ]
+        );
     }
 
     #[test]
@@ -327,7 +416,7 @@ mod tests {
         assert_eq!(all.category, "eop");
         assert_eq!(all.source, "usno");
         assert_eq!(all.filename, "finals2000A.all");
-        assert_eq!(all.url, "https://maia.usno.navy.mil/ser7/finals2000A.all");
+        assert_eq!(all.primary_url(), "https://maia.usno.navy.mil/ser7/finals2000A.all");
         assert_eq!(
             all.schedule,
             Schedule::WeeklyAt {
@@ -341,7 +430,7 @@ mod tests {
         assert_eq!(daily.category, "eop");
         assert_eq!(daily.source, "usno");
         assert_eq!(daily.filename, "finals2000A.daily");
-        assert_eq!(daily.url, "https://maia.usno.navy.mil/ser7/finals2000A.daily");
+        assert_eq!(daily.primary_url(), "https://maia.usno.navy.mil/ser7/finals2000A.daily");
         assert_eq!(daily.schedule, Schedule::Every(Duration::from_secs(24 * 3600)));
         assert_eq!(daily.alias_name, None);
     }
@@ -353,7 +442,7 @@ mod tests {
         assert_eq!(c04.category, "eop");
         assert_eq!(c04.source, "obspm");
         assert_eq!(c04.filename, "eopc04.1962-now");
-        assert_eq!(c04.url, "https://hpiers.obspm.fr/iers/eop/eopc04/eopc04.1962-now");
+        assert_eq!(c04.primary_url(), "https://hpiers.obspm.fr/iers/eop/eopc04/eopc04.1962-now");
         assert_eq!(c04.schedule, Schedule::Every(Duration::from_secs(24 * 3600)));
         assert_eq!(c04.alias_name, None);
     }
@@ -366,7 +455,7 @@ mod tests {
         assert_eq!(c04.source, "iers");
         assert_eq!(c04.filename, "EOP_C04_one_file_1962-now.txt");
         assert_eq!(c04.alias_name, Some("c04"));
-        assert!(c04.url.contains("EOP_20u24_C04_one_file_1962-now.txt"));
+        assert!(c04.primary_url().contains("EOP_20u24_C04_one_file_1962-now.txt"));
     }
 
     #[test]
@@ -377,8 +466,8 @@ mod tests {
         assert_eq!(starlink.source, "celestrak");
         assert_eq!(starlink.filename, "starlink.json");
         assert_eq!(starlink.content_type, "application/json");
-        assert!(starlink.url.contains("GROUP=starlink"));
-        assert!(starlink.url.contains("FORMAT=json"));
+        assert!(starlink.primary_url().contains("GROUP=starlink"));
+        assert!(starlink.primary_url().contains("FORMAT=json"));
     }
 
     #[test]
@@ -397,13 +486,26 @@ mod tests {
     }
 
     #[test]
+    fn product_without_a_source_is_rejected() {
+        let none = vec![Product {
+            category: "eop", source: "iers", name: "sourceless", urls: vec![],
+            filename: "f".into(), content_type: "text/plain", gunzip: false,
+            availability: Availability::Active, alias_name: None,
+            info_url: None, cadence_label: None,
+            schedule: Schedule::Every(Duration::from_secs(3600)),
+        }];
+        let err = validate_registry(&none).expect_err("a product with no urls is invalid");
+        assert!(err.contains("sourceless"), "{err}");
+    }
+
+    #[test]
     fn duplicate_active_alias_is_rejected() {
         let dupes = vec![
-            Product { category: "eop", source: "iers", name: "c04_a", url: "u".into(),
+            Product { category: "eop", source: "iers", name: "c04_a", urls: vec!["u".into()],
                 filename: "f".into(), content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: Some("c04"),
                 info_url: None, cadence_label: None,
                 schedule: Schedule::Every(Duration::from_secs(3600)) },
-            Product { category: "eop", source: "iers", name: "c04_b", url: "u".into(),
+            Product { category: "eop", source: "iers", name: "c04_b", urls: vec!["u".into()],
                 filename: "f".into(), content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: Some("c04"),
                 info_url: None, cadence_label: None,
                 schedule: Schedule::Every(Duration::from_secs(3600)) },

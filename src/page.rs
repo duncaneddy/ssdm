@@ -155,9 +155,17 @@ fn push_row(out: &mut String, p: &Product, domain: &str, key: &str, label: &str,
     let url_attr = esc_attr(&url);
     let path_display = format!("/{path}");
 
+    // Multi-part products link to their first part; the title says so, since
+    // "source" pointing at 1 of 20 files would otherwise misrepresent the product.
+    let src_title = if p.urls.len() > 1 {
+        format!("Upstream source (part 1 of {}, concatenated)", p.urls.len())
+    } else {
+        "Upstream source".to_string()
+    };
     let mut links = format!(
-        " <a class=\"src\" href=\"{}\" title=\"Upstream source\">source</a>",
-        esc_attr(&p.url)
+        " <a class=\"src\" href=\"{}\" title=\"{}\">source</a>",
+        esc_attr(p.primary_url()),
+        esc_attr(&src_title)
     );
     if let Some(info) = p.info_url {
         links.push_str(&format!(
@@ -314,7 +322,7 @@ mod tests {
         vec![
             Product {
                 category: "eop", source: "iers", name: "c04_20u24",
-                url: "https://example.test/x".into(),
+                urls: vec!["https://example.test/x".into()],
                 filename: "EOP_C04_one_file_1962-now.txt".into(),
                 content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: Some("c04"),
                 info_url: Some("https://iers.example/info"), cadence_label: None,
@@ -322,7 +330,7 @@ mod tests {
             },
             Product {
                 category: "eop", source: "iers", name: "c04_19u20",
-                url: "https://example.test/old".into(),
+                urls: vec!["https://example.test/old".into()],
                 filename: "EOP_C04_one_file_1962-now.txt".into(),
                 content_type: "text/plain", gunzip: false, availability: Availability::Frozen, alias_name: None,
                 info_url: None, cadence_label: None,
@@ -340,7 +348,7 @@ mod tests {
     fn product(category: &'static str, source: &'static str, name: &'static str, availability: Availability) -> Product {
         Product {
             category, source, name,
-            url: format!("https://h/{name}"), filename: format!("{name}.txt"),
+            urls: vec![format!("https://h/{name}")], filename: format!("{name}.txt"),
             content_type: "text/plain", gunzip: false, availability, alias_name: None,
             info_url: None, cadence_label: None,
             schedule: Schedule::Every(Duration::from_secs(3600)),
@@ -432,6 +440,18 @@ mod tests {
         assert!(html.contains("star_catalog/cds/fk5/latest/FK5_Readme.txt"));
         assert!(html.contains("star_catalog/cds/hipparcos/latest/Hipparcos_Catalog.txt"));
         assert!(html.contains("star_catalog/cds/hipparcos/latest/Hipparcos_Readme.txt"));
+        assert!(html.contains("star_catalog/cds/tycho2/latest/Tycho2_Catalog.txt"));
+        assert!(html.contains("star_catalog/cds/tycho2/latest/Tycho2_Readme.txt"));
+        // Tycho-2 is one served row, not 20 — the split is an upstream detail.
+        assert_eq!(
+            rows_for(&html, "tycho2/latest/Tycho2_Catalog.txt").len(),
+            1,
+            "20 upstream parts render as a single product row"
+        );
+        assert!(
+            html.contains("part 1 of 20, concatenated"),
+            "the source link says it points at one part of many"
+        );
         assert!(!html.contains("CelesTrak"), "CelesTrak is disabled and unadvertised");
         assert!(!html.contains("celestrak.org"), "not even as an upstream source link");
     }
@@ -655,7 +675,7 @@ mod tests {
     fn weekly_schedule_renders_weekday_and_time() {
         let items = vec![Product {
             category: "eop", source: "usno", name: "finals2000a_all",
-            url: "https://maia.usno.navy.mil/ser7/finals2000A.all".into(),
+            urls: vec!["https://maia.usno.navy.mil/ser7/finals2000A.all".into()],
             filename: "finals2000A.all".into(),
             content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: None,
             info_url: None, cadence_label: None,

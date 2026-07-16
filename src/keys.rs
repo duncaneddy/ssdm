@@ -28,7 +28,7 @@ mod tests {
     fn c04() -> Product {
         Product {
             category: "eop", source: "iers", name: "c04_20u24",
-            url: "https://example.test/x".into(),
+            urls: vec!["https://example.test/x".into()],
             filename: "EOP_C04_one_file_1962-now.txt".into(),
             content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: Some("c04"),
             info_url: None, cadence_label: None,
@@ -39,7 +39,7 @@ mod tests {
     fn finals() -> Product {
         Product {
             category: "eop", source: "iers", name: "finals_all",
-            url: "https://example.test/y".into(),
+            urls: vec!["https://example.test/y".into()],
             filename: "finals.all.iau2000.txt".into(),
             content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: None,
             info_url: None, cadence_label: None,
