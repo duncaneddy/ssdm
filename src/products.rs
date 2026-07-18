@@ -83,6 +83,48 @@ const TYCHO2_PARTS: u32 = 20;
 /// check.
 const STAR_CATALOG_CHECK: Schedule = Schedule::Every(Duration::from_secs(30 * 24 * 3600));
 
+/// Solar System Scope revises its texture set only occasionally, so a yearly
+/// poll is enough to pick up a re-render. A failure does not wait out the year:
+/// `RETRY_MS` in `src/schedule.rs` retries hourly until a fetch succeeds.
+const TEXTURE_CHECK: Schedule = Schedule::Every(Duration::from_secs(365 * 24 * 3600));
+
+/// The 2k textures mirrored from Solar System Scope, by upstream filename.
+///
+/// Earth's normal and specular maps are deliberately excluded: they are the only
+/// two published as `.tif` rather than web-ready `.jpg`/`.png`, and they encode
+/// surface relief and reflectivity rather than appearance, so they are not
+/// wanted for the rendering use these are mirrored for.
+///
+/// `_fictional` is upstream's own marker for the dwarf-planet textures, which are
+/// artistic impressions rather than observed imagery. It is kept in the served
+/// name so a consumer cannot mistake them for real surface maps.
+const TEXTURES: &[&str] = &[
+    "2k_sun.jpg",
+    "2k_mercury.jpg",
+    "2k_venus_surface.jpg",
+    "2k_venus_atmosphere.jpg",
+    "2k_earth_daymap.jpg",
+    "2k_earth_nightmap.jpg",
+    "2k_earth_clouds.jpg",
+    "2k_moon.jpg",
+    "2k_mars.jpg",
+    "2k_jupiter.jpg",
+    "2k_saturn.jpg",
+    "2k_saturn_ring_alpha.png",
+    "2k_uranus.jpg",
+    "2k_neptune.jpg",
+    "2k_ceres_fictional.jpg",
+    "2k_haumea_fictional.jpg",
+    "2k_makemake_fictional.jpg",
+    "2k_eris_fictional.jpg",
+    "2k_stars.jpg",
+    "2k_stars_milky_way.jpg",
+];
+
+/// Landing page for the texture set. It carries the CC BY 4.0 terms these are
+/// redistributed under, so every texture row links to it.
+const TEXTURE_INFO: &str = "https://www.solarsystemscope.com/textures/";
+
 /// Build the full registry: fixed EOP/SW/star-catalog entries + generated
 /// CelesTrak groups.
 pub fn products() -> Vec<Product> {
@@ -205,6 +247,33 @@ pub fn products() -> Vec<Product> {
     });
     items.push(cds_file("tycho2", "Tycho2_Readme.txt", "cats/I/259/ReadMe", false, TYC_INFO));
 
+    // Solar System Scope textures, served under the upstream filename. Unlike the
+    // star catalogs these need no renaming: `2k_<body>.<ext>` is already uniform
+    // and self-describing, and keeping it means a mirrored file is recognizable as
+    // the one upstream documents. The body name is derived from that filename
+    // rather than listed separately, so the two cannot drift apart.
+    for file in TEXTURES {
+        let (name, ext) = file
+            .rsplit_once('.')
+            .and_then(|(stem, ext)| stem.strip_prefix("2k_").map(|body| (body, ext)))
+            .unwrap_or_else(|| panic!("texture filename must be 2k_<name>.<ext>: {file}"));
+        let content_type = match ext {
+            "jpg" => "image/jpeg",
+            "png" => "image/png",
+            _ => panic!("unhandled texture extension: {file}"),
+        };
+        items.push(Product {
+            category: "texture", source: "solarsystemscope", name,
+            urls: vec![format!("https://www.solarsystemscope.com/textures/download/{file}")],
+            filename: (*file).into(),
+            content_type, gunzip: false,
+            availability: Availability::Active, alias_name: None,
+            info_url: Some(TEXTURE_INFO),
+            cadence_label: None,
+            schedule: TEXTURE_CHECK,
+        });
+    }
+
     for slug in CELESTRAK_GROUPS {
         items.push(Product {
             category: "catalog", source: "celestrak", name: slug,
@@ -277,16 +346,18 @@ mod tests {
     }
 
     #[test]
-    fn registry_fetches_only_eop_and_star_catalogs() {
+    fn registry_fetches_only_eop_star_catalogs_and_textures() {
         let items = products();
         let fetched: Vec<&str> = items
             .iter()
             .filter(|p| p.availability.is_fetched())
             .map(|p| p.category)
             .collect();
-        assert_eq!(fetched.len(), 11, "5 EOP + 6 star catalog files");
+        assert_eq!(fetched.len(), 31, "5 EOP + 6 star catalog + 20 texture files");
         assert!(
-            fetched.iter().all(|c| *c == "eop" || *c == "star_catalog"),
+            fetched
+                .iter()
+                .all(|c| *c == "eop" || *c == "star_catalog" || *c == "texture"),
             "no other category is fetched while CelesTrak is disabled: {fetched:?}"
         );
     }
@@ -406,6 +477,88 @@ mod tests {
             .collect();
         assert_eq!(keys.len(), 2, "two files under one dataset name");
         assert_ne!(keys[0], keys[1], "filename disambiguates the object key");
+    }
+
+    #[test]
+    fn textures_are_served_under_their_upstream_filenames() {
+        let items = products();
+        let tex: Vec<&Product> = items.iter().filter(|p| p.category == "texture").collect();
+        assert_eq!(tex.len(), 20, "22 published 2k textures less the two excluded maps");
+
+        for p in &tex {
+            assert_eq!(p.source, "solarsystemscope");
+            assert_eq!(p.availability, Availability::Active);
+            assert!(!p.gunzip, "the textures are served as published, not archived");
+            assert_eq!(p.alias_name, None);
+            assert_eq!(p.info_url, Some(TEXTURE_INFO), "CC BY 4.0 terms live here");
+            // Every mirrored file is the 2k resolution, and the served filename is
+            // the upstream one, so a consumer can match it against the source page.
+            assert!(p.filename.starts_with("2k_"), "{} is not a 2k texture", p.filename);
+            assert_eq!(
+                p.primary_url(),
+                format!("https://www.solarsystemscope.com/textures/download/{}", p.filename),
+                "served filename must be the upstream filename"
+            );
+        }
+
+        // The body name is derived from the filename, so the path and the file it
+        // serves cannot drift apart.
+        let moon = tex.iter().find(|p| p.name == "moon").expect("moon present");
+        assert_eq!(moon.filename, "2k_moon.jpg");
+        assert_eq!(moon.content_type, "image/jpeg");
+        assert_eq!(
+            crate::keys::object_key(moon),
+            "texture/solarsystemscope/moon/latest/2k_moon.jpg"
+        );
+
+        // Saturn's ring is the one PNG in the set — it carries an alpha channel
+        // that a JPEG could not represent, so it must not be typed as a JPEG.
+        let ring = tex.iter().find(|p| p.name == "saturn_ring_alpha").expect("ring present");
+        assert_eq!(ring.filename, "2k_saturn_ring_alpha.png");
+        assert_eq!(ring.content_type, "image/png");
+
+        // Multi-word bodies keep their full stem rather than being truncated at
+        // the first underscore.
+        for name in ["venus_surface", "venus_atmosphere", "earth_daymap", "stars_milky_way"] {
+            assert!(tex.iter().any(|p| p.name == name), "{name} present");
+        }
+
+        // Upstream's own "fictional" marker is preserved: these are artistic
+        // impressions, and dropping it would present them as observed imagery.
+        for name in ["ceres_fictional", "haumea_fictional", "makemake_fictional", "eris_fictional"] {
+            assert!(tex.iter().any(|p| p.name == name), "{name} keeps its marker");
+        }
+    }
+
+    #[test]
+    fn earth_normal_and_specular_maps_are_not_mirrored() {
+        // These two are deliberately excluded from the set. They are also the only
+        // two published as .tif, so a future filename-driven refactor that widened
+        // the extension match could silently pull them back in.
+        let items = products();
+        for p in items.iter().filter(|p| p.category == "texture") {
+            assert!(
+                !p.filename.contains("normal_map") && !p.filename.contains("specular_map"),
+                "excluded map was mirrored: {}",
+                p.filename
+            );
+            assert!(!p.filename.ends_with(".tif"), "no .tif is mirrored: {}", p.filename);
+        }
+    }
+
+    #[test]
+    fn textures_are_checked_yearly() {
+        let items = products();
+        let tex: Vec<&Product> = items.iter().filter(|p| p.category == "texture").collect();
+        assert!(!tex.is_empty());
+        for p in &tex {
+            assert_eq!(
+                p.schedule,
+                Schedule::Every(Duration::from_secs(365 * 24 * 3600)),
+                "{} polls yearly",
+                p.filename
+            );
+        }
     }
 
     #[test]

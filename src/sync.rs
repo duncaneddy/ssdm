@@ -178,6 +178,7 @@ async fn fetch_product<F: Fetcher>(
             .await
             .with_context(|| format!("part {}/{}: {url}", i + 1, p.urls.len()))?;
         let decoded = decode_body(p, raw, url)?;
+        check_declared_format(p, &decoded, url)?;
         if out.is_empty() {
             // Adopt the first part rather than copying it — this is the whole
             // buffer for a single-part product. Concatenating onto an empty
@@ -220,6 +221,33 @@ fn decode_body(p: &Product, bytes: Vec<u8>, url: &str) -> anyhow::Result<Vec<u8>
         .read_to_end(&mut out)
         .with_context(|| format!("gunzip {url} ({} bytes)", bytes.len()))?;
     Ok(out)
+}
+
+/// Reject a body that is not the format the product declares.
+///
+/// A download endpoint that answers 200 with an HTML interstitial or a CDN error
+/// page is otherwise invisible to this pipeline: the bytes hash stably, upload
+/// cleanly under `image/jpeg`, and compare "unchanged" on every later pass, so
+/// the mirror would serve HTML from an image URL indefinitely with the landing
+/// page reporting success. `decode_body` catches this for the gzipped catalogs
+/// because a non-archive fails to decode; a raw binary product has no such
+/// check, so the format signature is it.
+///
+/// Only formats with a signature we actually mirror are checked — text products
+/// have no magic bytes to test and pass through.
+fn check_declared_format(p: &Product, bytes: &[u8], url: &str) -> anyhow::Result<()> {
+    let expected: &[u8] = match p.content_type {
+        "image/jpeg" => &[0xFF, 0xD8, 0xFF],
+        "image/png" => b"\x89PNG\r\n\x1a\n",
+        _ => return Ok(()),
+    };
+    anyhow::ensure!(
+        bytes.starts_with(expected),
+        "{url} returned {} bytes that are not {} data",
+        bytes.len(),
+        p.content_type
+    );
+    Ok(())
 }
 
 /// Write the product locally and to the bucket.
@@ -514,6 +542,79 @@ mod tests {
         let st = crate::local::load_status(dir.path());
         assert_eq!(st[&key].hash, "", "no content recorded for a failed join");
         assert_eq!(st[&key].last_attempt, 1000);
+    }
+
+    fn image_product(url: &str, content_type: &'static str, filename: &str) -> Product {
+        Product {
+            category: "texture", source: "solarsystemscope", name: "moon",
+            urls: vec![url.into()], filename: filename.into(),
+            content_type, gunzip: false,
+            availability: crate::products::Availability::Active, alias_name: None,
+            info_url: None, cadence_label: None,
+            schedule: Schedule::Every(Duration::from_secs(3600)),
+        }
+    }
+
+    #[tokio::test]
+    async fn html_served_as_an_image_is_rejected_not_mirrored() {
+        // The dangerous case is a 200 response carrying an HTML interstitial. It
+        // fetches fine, hashes stably, and would upload under image/jpeg — and
+        // because the hash never changes, every later pass would call it
+        // "unchanged" and never repair it. It must fail like a bad download.
+        let dir = tempfile::tempdir().unwrap();
+        let p = image_product("https://h/2k_moon.jpg", "image/jpeg", "2k_moon.jpg");
+        let all = vec![image_product("https://h/2k_moon.jpg", "image/jpeg", "2k_moon.jpg")];
+        let key = crate::keys::object_key(&p);
+
+        let mut out = HashMap::new();
+        out.insert(
+            "https://h/2k_moon.jpg".to_string(),
+            Some(b"<!DOCTYPE html><html>nope</html>".to_vec()),
+        );
+        let fetcher = FakeFetcher { out };
+        let store = FakeStore::default();
+        let mut rate = RateLimiter::new(Duration::ZERO, Duration::ZERO);
+
+        let sum = run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), "example.org", 1000).await;
+        assert_eq!((sum.checked, sum.changed, sum.failed), (0, 0, 1), "not an image => failed");
+        assert!(
+            !store.put_keys().iter().any(|k| k == &key),
+            "HTML must never be uploaded under an image content type"
+        );
+        let st = crate::local::load_status(dir.path());
+        assert_eq!(st[&key].hash, "", "no content recorded, so the next pass retries");
+    }
+
+    #[tokio::test]
+    async fn genuine_image_bytes_pass_the_format_check() {
+        let dir = tempfile::tempdir().unwrap();
+        // Minimal valid signatures for the two formats the registry mirrors.
+        for (ct, filename, magic) in [
+            ("image/jpeg", "2k_moon.jpg", vec![0xFFu8, 0xD8, 0xFF, 0xE0, 0x00]),
+            ("image/png", "2k_ring.png", b"\x89PNG\r\n\x1a\n\x00".to_vec()),
+        ] {
+            let url = format!("https://h/{filename}");
+            let p = image_product(&url, ct, filename);
+            let all = vec![image_product(&url, ct, filename)];
+            let mut out = HashMap::new();
+            out.insert(url.clone(), Some(magic.clone()));
+            let fetcher = FakeFetcher { out };
+            let store = FakeStore::default();
+            let mut rate = RateLimiter::new(Duration::ZERO, Duration::ZERO);
+
+            let sum = run_sync(&all, &[&p], &fetcher, &store, &mut rate, dir.path(), "example.org", 1000).await;
+            assert_eq!(sum.failed, 0, "{ct} with a valid signature must be accepted");
+            assert_eq!(store.body_of(&crate::keys::object_key(&p)).unwrap(), magic);
+        }
+    }
+
+    #[test]
+    fn format_check_ignores_products_without_a_signature() {
+        // Text products have no magic bytes; the check must not invent a rule for
+        // them or every EOP file would start failing.
+        let text = product("active", "https://h/active");
+        assert!(check_declared_format(&text, b"1973 01 01 ...", "https://h/active").is_ok());
+        assert!(check_declared_format(&text, b"", "https://h/active").is_ok());
     }
 
     #[tokio::test]

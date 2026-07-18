@@ -1,8 +1,8 @@
 # SSDM — Simple Space Data Mirror
 
-A self-hosted service that mirrors Earth Orientation Parameter (EOP) files and
-star catalogs (FK5, Hipparcos) into a public Cloudflare R2 bucket served at
-https://yourgreatdomain.com, for use with
+A self-hosted service that mirrors Earth Orientation Parameter (EOP) files, star
+catalogs (FK5, Hipparcos, Tycho-2), and planetary textures into a public
+Cloudflare R2 bucket served at https://yourgreatdomain.com, for use with
 [Brahe](https://github.com/duncaneddy/brahe).
 
 ## How it works
@@ -177,6 +177,49 @@ That uniformity costs two transforms:
 Tycho-2's supplements (`suppl_1`, `suppl_2`) are deliberately excluded: they use
 a different column layout, so appending them would put two incompatible record
 formats in one file.
+
+## Textures
+
+The 2k body textures from [Solar System Scope](https://www.solarsystemscope.com/textures/)
+are mirrored under `texture/solarsystemscope/<body>/latest/2k_<body>.<ext>` —
+20 files, ~11.5 MB in total. The body maps are 2048×1024 equirectangular; the
+ring texture is not (`2k_saturn_ring_alpha.png` is 2048×125), so do not assume a
+uniform aspect ratio across the set.
+
+Unlike the star catalogs these need no renaming: `2k_<body>.<ext>` is already
+uniform and self-describing, so the served filename is the upstream one and the
+`<body>` path segment is *derived* from it rather than listed separately. All are
+JPEG except `2k_saturn_ring_alpha.png`, which carries an alpha channel a JPEG
+could not represent.
+
+Two of the 22 published textures are deliberately excluded: **Earth Normal Map**
+and **Earth Specular Map**. They are the only two published as `.tif` rather than
+web-ready `.jpg`/`.png`, and they encode surface relief and reflectivity rather
+than appearance.
+
+The dwarf-planet textures keep upstream's `_fictional` marker in their path
+(`ceres_fictional`, `haumea_fictional`, `makemake_fictional`, `eris_fictional`).
+They are artistic impressions, not observed imagery, and dropping the marker
+would present them as real surface maps.
+
+These poll **yearly** — the set changes only when Solar System Scope re-renders
+it. A failed fetch retries sooner than that, but *not* hourly: the retry cadence
+is derived from the interval (`MAX_RETRIES_PER_INTERVAL` in `src/schedule.rs`),
+so a texture retries about every 12 hours rather than issuing ~8,760 requests a
+year at a free provider for a URL that is permanently broken. Products at or
+below the 30-day star-catalog cadence are unaffected — 30 days divides to exactly
+`RETRY_MS`.
+
+Because these are binary, they also carry a format check: a fetched body must
+start with the JPEG or PNG signature its content type declares
+(`check_declared_format` in `src/sync.rs`). Without it, a download endpoint
+answering 200 with an HTML interstitial would be hashed, uploaded as
+`image/jpeg`, and then compare "unchanged" forever.
+
+> The textures are licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/),
+> which permits redistribution **with attribution**. The landing page footer
+> credits Solar System Scope and links the license; keep that notice in place if
+> you re-render the page.
 
 Note the memory cost. `Tycho2_Catalog.txt` is held in memory to be hashed and
 uploaded, so a refresh transiently needs ~500 MB+. `docker-compose.yml` sets no

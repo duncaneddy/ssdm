@@ -9,6 +9,20 @@ use crate::schedule::{Schedule, Weekday};
 pub fn render_index_html(domain: &str, items: &[Product]) -> String {
     let sections = render_sections(domain, items);
 
+    // CC BY 4.0 requires credit wherever the textures are served — and only
+    // there. Pausing the provider (`Availability::Disabled`, the CelesTrak
+    // pattern) drops every texture row, so the notice has to drop with them
+    // rather than credit and link content the mirror no longer serves.
+    let texture_credit = if items
+        .iter()
+        .any(|p| p.category == "texture" && p.availability.is_listed())
+    {
+        "\n<br>Textures by <a href=\"https://www.solarsystemscope.com/textures/\">Solar System Scope</a>, \
+licensed under <a href=\"https://creativecommons.org/licenses/by/4.0/\">CC BY 4.0</a>."
+    } else {
+        ""
+    };
+
     format!(
         r#"<!DOCTYPE html>
 <html lang="en">
@@ -73,13 +87,15 @@ details{{padding:.5rem .6rem}}}}
 <h1>Simple Space Data Mirror</h1>
 <p>A public mirror of major public space data sources commonly used in astrodynamics
 computations. Developed and maintained for use with
-<a href="https://github.com/duncaneddy/brahe">brahe</a> to provide redundancy in parameter
+<a href="https://github.com/duncaneddy/brahe">brahe</a> to reduce the load on much-appreciated
+freely provided resources to the community and prevent brahe from generating significant load
+and cost on those resources as well as provide the community additional redundancy in parameter
 sources. Each file refreshes on its own schedule
-(from daily for Earth orientation to monthly for the fixed star catalogs) and are served at stable URLs of the form
+(from daily for Earth orientation to yearly for the body textures) and are served at stable URLs of the form
 <code>{domain}/&lt;category&gt;/&lt;source&gt;/&lt;name&gt;/latest/&lt;filename&gt;</code>.</p>
 </header>
 {sections}<footer>Source on <a href="https://github.com/duncaneddy/ssdm">GitHub</a> — found a bug or have a suggestion?
-<a href="https://github.com/duncaneddy/ssdm/issues/new">Open an issue</a>.</footer>
+<a href="https://github.com/duncaneddy/ssdm/issues/new">Open an issue</a>.{texture_credit}</footer>
 <script>
 function rel(ms){{
   if(!ms) return "—";
@@ -122,6 +138,11 @@ fetch("/status.json").then(function(r){{return r.ok?r.json():{{}};}}).then(funct
     if(sz){{ sz.textContent=fmtSize(e.size); if(e.size) sz.title=e.size+" bytes"; }}
 
     var c=lvl(e.last_checked), u=lvl(e.last_updated);
+    // Cadence-relative staleness alone cannot flag a slow product that is failing:
+    // a yearly texture whose URL broke stays inside 1x its cadence — and therefore
+    // green — for a full year. Whenever the most recent attempt did not succeed,
+    // flag it regardless of cadence.
+    if(e.last_attempt && (!e.last_checked || e.last_attempt>e.last_checked)) c=Math.max(c,1);
     paint(ck,c); paint(up,u);
     paint(dot,Math.max(c,u));  // dot = worse of connectivity and data freshness
 
@@ -201,6 +222,7 @@ fn category_label(cat: &str) -> &str {
         "space_weather" => "Space Weather",
         "catalog" => "Ephemeris",
         "star_catalog" => "Star Catalogs",
+        "texture" => "Textures",
         other => other,
     }
 }
@@ -212,6 +234,7 @@ fn provider_label(src: &str) -> &str {
         "obspm" => "Paris Observatory",
         "celestrak" => "CelesTrak",
         "cds" => "CDS / VizieR",
+        "solarsystemscope" => "Solar System Scope",
         other => other,
     }
 }
@@ -277,6 +300,7 @@ fn humanize_interval(d: std::time::Duration) -> String {
         match secs / 86_400 {
             1 => "daily".to_string(),
             7 => "weekly".to_string(),
+            365 => "yearly".to_string(),
             n => format!("{n}d"),
         }
     } else if secs % 3_600 == 0 {
@@ -457,6 +481,73 @@ mod tests {
     }
 
     #[test]
+    fn real_registry_lists_textures_with_attribution() {
+        let html = render_index_html("example.org", &crate::products::products());
+        assert!(html.contains("Textures"), "texture section rendered");
+        assert!(html.contains("Solar System Scope"), "provider heading rendered");
+        assert!(html.contains("texture/solarsystemscope/moon/latest/2k_moon.jpg"));
+        assert!(html.contains("texture/solarsystemscope/saturn_ring_alpha/latest/2k_saturn_ring_alpha.png"));
+        assert_eq!(
+            rows_for(&html, "texture/solarsystemscope/").len(),
+            20,
+            "one row per mirrored texture"
+        );
+        // CC BY 4.0 permits redistribution only with credit and a license notice,
+        // so the page must carry both wherever the textures are served.
+        assert!(html.contains("https://www.solarsystemscope.com/textures/"), "credit to the source");
+        assert!(html.contains("https://creativecommons.org/licenses/by/4.0/"), "license indicated");
+    }
+
+    #[test]
+    fn texture_credit_disappears_when_the_provider_is_paused() {
+        // The credit is required while the textures are served, and must not
+        // outlive them: pausing the provider the CelesTrak way drops every row,
+        // so a hardcoded footer would credit content the mirror no longer serves.
+        let mut items = crate::products::products();
+        assert!(
+            render_index_html("example.org", &items).contains("Solar System Scope"),
+            "credited while the textures are listed"
+        );
+        for p in items.iter_mut().filter(|p| p.category == "texture") {
+            p.availability = Availability::Disabled;
+        }
+        let html = render_index_html("example.org", &items);
+        assert!(!html.contains("Solar System Scope"), "no credit without rows");
+        assert!(!html.contains("solarsystemscope.com"), "not even as a link");
+        assert!(!html.contains("creativecommons.org"), "and no dangling license notice");
+    }
+
+    #[test]
+    fn failing_product_is_flagged_regardless_of_cadence() {
+        // Cadence-relative staleness alone leaves a yearly product green for a
+        // year after its fetches start failing. The checked cell must escalate
+        // whenever the latest attempt did not succeed.
+        let html = render_index_html("example.org", &sample());
+        assert!(
+            html.contains("e.last_attempt>e.last_checked"),
+            "a failed latest attempt is detected independently of the interval"
+        );
+        assert!(html.contains("c=Math.max(c,1)"), "and escalates the checked level");
+    }
+
+    #[test]
+    fn header_cadence_range_matches_the_registry() {
+        let html = render_index_html("example.org", &crate::products::products());
+        assert!(html.contains("to yearly for the body textures"), "slowest cadence stated");
+        assert!(
+            !html.contains("to monthly for the fixed star catalogs"),
+            "monthly is no longer the slowest cadence on the page"
+        );
+    }
+
+    #[test]
+    fn excluded_earth_maps_are_absent_from_the_page() {
+        let html = render_index_html("example.org", &crate::products::products());
+        assert!(!html.contains("normal_map"), "Earth normal map is not mirrored");
+        assert!(!html.contains("specular_map"), "Earth specular map is not mirrored");
+    }
+
+    #[test]
     fn lists_alias_url() {
         let html = render_index_html("example.org", &sample());
         assert!(html.contains("https://example.org/eop/iers/c04/latest/EOP_C04_one_file_1962-now.txt"));
@@ -579,6 +670,7 @@ mod tests {
         assert_eq!(humanize_interval(Duration::from_secs(6 * 3600)), "6h");
         assert_eq!(humanize_interval(Duration::from_secs(2 * 3600)), "2h");
         assert_eq!(humanize_interval(Duration::from_secs(3 * 24 * 3600)), "3d");
+        assert_eq!(humanize_interval(Duration::from_secs(365 * 24 * 3600)), "yearly");
         assert_eq!(humanize_interval(Duration::from_secs(90 * 60)), "90m");
     }
 

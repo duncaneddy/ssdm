@@ -106,15 +106,33 @@ impl Schedule {
     }
 }
 
+/// Ceiling on how many times a failing product retries within one nominal
+/// cadence.
+///
+/// `RETRY_MS` alone is the right retry for a 30-day catalog — 720 attempts a
+/// month — but it does not scale: on a yearly product it means ~8,760 requests a
+/// year, forever, against a free upstream that is not even expected to change.
+/// A broken URL would turn into sustained hammering with no upper bound, which
+/// is how a mirror gets blocked. Deriving the retry from the cadence instead
+/// bounds every product to the same number of attempts per cycle. 30 days
+/// divides to exactly `RETRY_MS`, so every product at or below that cadence
+/// keeps its existing behaviour unchanged.
+const MAX_RETRIES_PER_INTERVAL: u64 = 720;
+
 /// How long an `Every` product waits before its next attempt: its full interval
-/// after a success, or the shorter retry cadence after a failure. Capped by the
-/// interval so a sub-hour product is never slowed down by the retry floor.
+/// after a success, or the shorter retry cadence after a failure.
+///
+/// The retry is floored at `RETRY_MS` so a short-cadence product is never slowed
+/// down, and capped by the interval so it never waits longer than the product's
+/// own cycle.
 fn every_wait_ms(interval: Duration, last_attempt: Option<u64>, last_checked: Option<u64>) -> u64 {
     let interval_ms = interval.as_millis() as u64;
     if last_attempt_succeeded(last_attempt, last_checked) {
         interval_ms
     } else {
-        RETRY_MS.min(interval_ms)
+        (interval_ms / MAX_RETRIES_PER_INTERVAL)
+            .max(RETRY_MS)
+            .min(interval_ms)
     }
 }
 
@@ -179,6 +197,33 @@ mod tests {
         assert!(!monthly.is_due(Some(t), Some(t), t + month - 1), "success consumes the interval");
         assert!(monthly.is_due(Some(t), Some(t), t + month));
         assert_eq!(monthly.remaining_ms(Some(t), Some(t), t), month);
+    }
+
+    #[test]
+    fn retry_cadence_scales_with_a_very_long_interval() {
+        // A yearly product retrying on the bare RETRY_MS floor would issue ~8,760
+        // requests a year at a free upstream, indefinitely, for a URL that is
+        // broken — the surest way to get a mirror blocked. The retry must scale
+        // with the cadence so the attempt count per cycle stays bounded.
+        let yearly = Schedule::Every(Duration::from_secs(365 * 24 * 3600));
+        let t = 1_000_000_000_000;
+        let wait = yearly.remaining_ms(Some(t), Some(0), t);
+        assert_eq!(
+            wait,
+            365 * DAY / MAX_RETRIES_PER_INTERVAL,
+            "retry is one cadence-slice, not the flat hourly floor"
+        );
+        assert!(wait > RETRY_MS, "and is longer than the floor: {wait}");
+        assert!(
+            !yearly.is_due(Some(t), Some(0), t + RETRY_MS),
+            "must NOT retry an hour after a failure"
+        );
+        assert!(yearly.is_due(Some(t), Some(0), t + wait), "but does retry within the year");
+
+        // 30 days is the divisor's fixed point: every product at or below the
+        // star-catalog cadence keeps exactly its previous retry behaviour.
+        let monthly = Schedule::Every(Duration::from_secs(30 * 24 * 3600));
+        assert_eq!(monthly.remaining_ms(Some(t), Some(0), t), RETRY_MS);
     }
 
     #[test]
