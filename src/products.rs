@@ -136,7 +136,10 @@ pub fn products() -> Vec<Product> {
             content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: None,
             info_url: Some("https://www.iers.org/IERS/EN/DataProducts/EarthOrientationData/eop.html"),
             cadence_label: None,
-            schedule: Schedule::Every(Duration::from_secs(24 * 3600)),
+            schedule: Schedule::WeeklyAt {
+                weekday: Weekday::Thu,
+                time: Duration::from_secs(18 * 3600 + 15 * 60),
+            },
         },
         Product {
             category: "eop", source: "iers", name: "c04_20u24",
@@ -632,7 +635,13 @@ mod tests {
     fn products_have_expected_schedules() {
         let items = products();
         let get = |name: &str| &items.iter().find(|p| p.name == name).unwrap().schedule;
-        assert_eq!(get("finals_all"), &Schedule::Every(Duration::from_secs(24 * 3600)));
+        assert_eq!(
+            get("finals_all"),
+            &Schedule::WeeklyAt {
+                weekday: Weekday::Thu,
+                time: Duration::from_secs(18 * 3600 + 15 * 60),
+            }
+        );
         assert_eq!(get("c04_20u24"), &Schedule::Every(Duration::from_secs(7 * 24 * 3600)));
         assert_eq!(get("sw_all"), &Schedule::Every(Duration::from_secs(8 * 3600)));
         assert_eq!(get("starlink"), &Schedule::Every(Duration::from_secs(8 * 3600)));
