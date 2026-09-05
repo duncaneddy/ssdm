@@ -181,6 +181,48 @@ pub fn products() -> Vec<Product> {
             schedule: Schedule::Every(Duration::from_secs(24 * 3600)),
         },
         Product {
+            category: "eop", source: "usno", name: "finals_all",
+            urls: vec!["https://maia.usno.navy.mil/ser7/finals.all".into()],
+            filename: "finals.all".into(),
+            content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: None,
+            info_url: Some("https://maia.usno.navy.mil/ser7/readme"),
+            cadence_label: None,
+            schedule: Schedule::WeeklyAt {
+                weekday: Weekday::Thu,
+                time: Duration::from_secs(18 * 3600 + 15 * 60),
+            },
+        },
+        Product {
+            category: "eop", source: "usno", name: "finals_daily",
+            urls: vec!["https://maia.usno.navy.mil/ser7/finals.daily".into()],
+            filename: "finals.daily".into(),
+            content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: None,
+            info_url: Some("https://maia.usno.navy.mil/ser7/readme"),
+            cadence_label: None,
+            schedule: Schedule::Every(Duration::from_secs(24 * 3600)),
+        },
+        Product {
+            category: "eop", source: "iers", name: "finals_all_iau1980",
+            urls: vec!["https://datacenter.iers.org/data/latestVersion/finals.all.iau1980.txt".into()],
+            filename: "finals.all.iau1980.txt".into(),
+            content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: None,
+            info_url: Some("https://www.iers.org/IERS/EN/DataProducts/EarthOrientationData/eop.html"),
+            cadence_label: None,
+            schedule: Schedule::WeeklyAt {
+                weekday: Weekday::Thu,
+                time: Duration::from_secs(18 * 3600 + 15 * 60),
+            },
+        },
+        Product {
+            category: "eop", source: "iers", name: "finals_daily_iau1980",
+            urls: vec!["https://datacenter.iers.org/data/latestVersion/finals.daily.iau1980.txt".into()],
+            filename: "finals.daily.iau1980.txt".into(),
+            content_type: "text/plain", gunzip: false, availability: Availability::Active, alias_name: None,
+            info_url: Some("https://www.iers.org/IERS/EN/DataProducts/EarthOrientationData/eop.html"),
+            cadence_label: None,
+            schedule: Schedule::Every(Duration::from_secs(24 * 3600)),
+        },
+        Product {
             category: "space_weather", source: "celestrak", name: "sw_all",
             urls: vec!["https://celestrak.org/SpaceData/sw19571001.txt".into()],
             filename: "sw19571001.txt".into(),
@@ -292,16 +334,26 @@ pub fn products() -> Vec<Product> {
     items
 }
 
-/// Enforce registry invariants: every product has at least one source, and at
-/// most one fetched product claims each (category, source, alias_name).
+/// Enforce registry invariants: every product has at least one source, no two
+/// products share an object key, and at most one fetched product claims each
+/// (category, source, alias_name).
 pub fn validate_registry(items: &[Product]) -> Result<(), String> {
     let mut seen: HashSet<(&str, &str, &str)> = HashSet::new();
+    let mut keys: HashSet<String> = HashSet::new();
     for p in items {
         // `primary_url` indexes urls[0], and a product with no source could never
         // be fetched anyway — fail loudly at startup rather than panicking while
         // rendering the landing page.
         if p.urls.is_empty() {
             return Err(format!("product has no urls: {}/{}/{}", p.category, p.source, p.name));
+        }
+        // The object key is what a product actually owns in the bucket, so it is
+        // the only tuple that must be unique. `name` is not: a dataset spanning
+        // several files shares one, and two sources may publish the same one.
+        // Unfetched products are included — their objects stay served.
+        let key = crate::keys::object_key(p);
+        if !keys.insert(key.clone()) {
+            return Err(format!("duplicate object key: {key}"));
         }
         if !p.availability.is_fetched() {
             continue;
@@ -319,6 +371,15 @@ pub fn validate_registry(items: &[Product]) -> Result<(), String> {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    /// Look a product up by the pair that actually identifies it. `name` alone is
+    /// not unique: IERS and USNO each publish a `finals_all`.
+    fn find<'a>(items: &'a [Product], source: &str, name: &str) -> &'a Product {
+        items
+            .iter()
+            .find(|p| p.source == source && p.name == name)
+            .unwrap_or_else(|| panic!("{source}/{name} present"))
+    }
 
     #[test]
     fn availability_separates_fetching_from_listing() {
@@ -356,7 +417,7 @@ mod tests {
             .filter(|p| p.availability.is_fetched())
             .map(|p| p.category)
             .collect();
-        assert_eq!(fetched.len(), 31, "5 EOP + 6 star catalog + 20 texture files");
+        assert_eq!(fetched.len(), 35, "9 EOP + 6 star catalog + 20 texture files");
         assert!(
             fetched
                 .iter()
@@ -568,9 +629,8 @@ mod tests {
     fn usno_finals2000a_entries_present() {
         let items = products();
 
-        let all = items.iter().find(|p| p.name == "finals2000a_all").expect("finals2000a_all present");
+        let all = find(&items, "usno", "finals2000a_all");
         assert_eq!(all.category, "eop");
-        assert_eq!(all.source, "usno");
         assert_eq!(all.filename, "finals2000A.all");
         assert_eq!(all.primary_url(), "https://maia.usno.navy.mil/ser7/finals2000A.all");
         assert_eq!(
@@ -582,9 +642,8 @@ mod tests {
         );
         assert_eq!(all.alias_name, None);
 
-        let daily = items.iter().find(|p| p.name == "finals2000a_daily").expect("finals2000a_daily present");
+        let daily = find(&items, "usno", "finals2000a_daily");
         assert_eq!(daily.category, "eop");
-        assert_eq!(daily.source, "usno");
         assert_eq!(daily.filename, "finals2000A.daily");
         assert_eq!(daily.primary_url(), "https://maia.usno.navy.mil/ser7/finals2000A.daily");
         assert_eq!(daily.schedule, Schedule::Every(Duration::from_secs(24 * 3600)));
@@ -627,6 +686,125 @@ mod tests {
     }
 
     #[test]
+    fn usno_finals1980_entries_present() {
+        let items = products();
+
+        let all = find(&items, "usno", "finals_all");
+        assert_eq!(all.category, "eop");
+        assert_eq!(all.filename, "finals.all");
+        assert_eq!(all.primary_url(), "https://maia.usno.navy.mil/ser7/finals.all");
+        assert_eq!(all.info_url, Some("https://maia.usno.navy.mil/ser7/readme"));
+        assert_eq!(
+            all.schedule,
+            Schedule::WeeklyAt {
+                weekday: Weekday::Thu,
+                time: Duration::from_secs(18 * 3600 + 15 * 60),
+            }
+        );
+        assert_eq!(all.alias_name, None);
+
+        let daily = find(&items, "usno", "finals_daily");
+        assert_eq!(daily.category, "eop");
+        assert_eq!(daily.filename, "finals.daily");
+        assert_eq!(daily.primary_url(), "https://maia.usno.navy.mil/ser7/finals.daily");
+        assert_eq!(daily.info_url, Some("https://maia.usno.navy.mil/ser7/readme"));
+        assert_eq!(daily.schedule, Schedule::Every(Duration::from_secs(24 * 3600)));
+        assert_eq!(daily.alias_name, None);
+    }
+
+    #[test]
+    fn iers_finals1980_entries_present() {
+        let items = products();
+        let base = "https://datacenter.iers.org/data/latestVersion";
+
+        let all = find(&items, "iers", "finals_all_iau1980");
+        assert_eq!(all.category, "eop");
+        assert_eq!(all.filename, "finals.all.iau1980.txt");
+        assert_eq!(all.primary_url(), format!("{base}/finals.all.iau1980.txt"));
+        assert_eq!(
+            all.schedule,
+            Schedule::WeeklyAt {
+                weekday: Weekday::Thu,
+                time: Duration::from_secs(18 * 3600 + 15 * 60),
+            }
+        );
+        assert_eq!(all.alias_name, None);
+
+        let daily = find(&items, "iers", "finals_daily_iau1980");
+        assert_eq!(daily.category, "eop");
+        assert_eq!(daily.filename, "finals.daily.iau1980.txt");
+        assert_eq!(daily.primary_url(), format!("{base}/finals.daily.iau1980.txt"));
+        assert_eq!(daily.schedule, Schedule::Every(Duration::from_secs(24 * 3600)));
+        assert_eq!(daily.alias_name, None);
+    }
+
+    /// The IAU1980 and IAU2000A finals files are two renderings of one solution,
+    /// so a source serves them under distinct paths but identical filenames would
+    /// collide. Both halves are checked here because the registry is the only
+    /// place the pairing is expressed.
+    #[test]
+    fn nutation_pairs_are_served_under_distinct_paths() {
+        let items = products();
+        let keys: Vec<String> = items
+            .iter()
+            .filter(|p| p.category == "eop" && p.name.starts_with("finals"))
+            .map(|p| format!("{}/{}/{}", p.source, p.name, p.filename))
+            .collect();
+        let unique: HashSet<&String> = keys.iter().collect();
+        assert_eq!(unique.len(), keys.len(), "finals products do not collide: {keys:?}");
+        assert_eq!(keys.len(), 7, "three IAU2000A + four IAU1980 finals products");
+    }
+
+    #[test]
+    fn duplicate_object_key_is_rejected() {
+        // Two products landing on one object key would silently overwrite each
+        // other in the bucket. `name` alone cannot catch this: IERS and USNO both
+        // publish a `finals_all`, and that is legitimate.
+        let dupes = vec![
+            Product { category: "eop", source: "usno", name: "finals_all", urls: vec!["u".into()],
+                filename: "finals.all".into(), content_type: "text/plain", gunzip: false,
+                availability: Availability::Active, alias_name: None,
+                info_url: None, cadence_label: None,
+                schedule: Schedule::Every(Duration::from_secs(3600)) },
+            Product { category: "eop", source: "usno", name: "finals_all", urls: vec!["v".into()],
+                filename: "finals.all".into(), content_type: "text/plain", gunzip: false,
+                availability: Availability::Active, alias_name: None,
+                info_url: None, cadence_label: None,
+                schedule: Schedule::Every(Duration::from_secs(3600)) },
+        ];
+        let err = validate_registry(&dupes).expect_err("two products cannot share an object key");
+        assert!(err.contains("finals.all"), "{err}");
+    }
+
+    #[test]
+    fn one_name_may_span_several_files() {
+        // A dataset spanning several files (a catalog plus its ReadMe) shares one
+        // `name` on purpose; the filename keeps the object keys apart.
+        let dataset = vec![
+            Product { category: "star_catalog", source: "cds", name: "fk5", urls: vec!["u".into()],
+                filename: "FK5_Catalog.txt".into(), content_type: "text/plain", gunzip: false,
+                availability: Availability::Active, alias_name: None,
+                info_url: None, cadence_label: None,
+                schedule: Schedule::Every(Duration::from_secs(3600)) },
+            Product { category: "star_catalog", source: "cds", name: "fk5", urls: vec!["v".into()],
+                filename: "FK5_Readme.txt".into(), content_type: "text/plain", gunzip: false,
+                availability: Availability::Active, alias_name: None,
+                info_url: None, cadence_label: None,
+                schedule: Schedule::Every(Duration::from_secs(3600)) },
+        ];
+        assert!(validate_registry(&dataset).is_ok(), "distinct filenames do not collide");
+    }
+
+    /// Two products may share a `name` across sources, but never an object key.
+    #[test]
+    fn duplicate_names_across_sources_keep_distinct_object_keys() {
+        let items = products();
+        let iers = find(&items, "iers", "finals_all");
+        let usno = find(&items, "usno", "finals_all");
+        assert_ne!(crate::keys::object_key(iers), crate::keys::object_key(usno));
+    }
+
+    #[test]
     fn default_registry_passes_validation() {
         assert!(validate_registry(&products()).is_ok());
     }
@@ -634,17 +812,21 @@ mod tests {
     #[test]
     fn products_have_expected_schedules() {
         let items = products();
-        let get = |name: &str| &items.iter().find(|p| p.name == name).unwrap().schedule;
-        assert_eq!(
-            get("finals_all"),
-            &Schedule::WeeklyAt {
-                weekday: Weekday::Thu,
-                time: Duration::from_secs(18 * 3600 + 15 * 60),
-            }
-        );
-        assert_eq!(get("c04_20u24"), &Schedule::Every(Duration::from_secs(7 * 24 * 3600)));
-        assert_eq!(get("sw_all"), &Schedule::Every(Duration::from_secs(8 * 3600)));
-        assert_eq!(get("starlink"), &Schedule::Every(Duration::from_secs(8 * 3600)));
+        let get = |source: &str, name: &str| &find(&items, source, name).schedule;
+        let bulletin_a = Schedule::WeeklyAt {
+            weekday: Weekday::Thu,
+            time: Duration::from_secs(18 * 3600 + 15 * 60),
+        };
+        let daily = Schedule::Every(Duration::from_secs(24 * 3600));
+
+        assert_eq!(get("iers", "finals_all"), &bulletin_a);
+        assert_eq!(get("iers", "finals_all_iau1980"), &bulletin_a);
+        assert_eq!(get("iers", "finals_daily_iau1980"), &daily);
+        assert_eq!(get("usno", "finals_all"), &bulletin_a);
+        assert_eq!(get("usno", "finals_daily"), &daily);
+        assert_eq!(get("iers", "c04_20u24"), &Schedule::Every(Duration::from_secs(7 * 24 * 3600)));
+        assert_eq!(get("celestrak", "sw_all"), &Schedule::Every(Duration::from_secs(8 * 3600)));
+        assert_eq!(get("celestrak", "starlink"), &Schedule::Every(Duration::from_secs(8 * 3600)));
     }
 
     #[test]
@@ -678,9 +860,9 @@ mod tests {
     #[test]
     fn known_products_carry_info_urls() {
         let items = products();
-        let finals = items.iter().find(|p| p.name == "finals_all").unwrap();
+        let finals = find(&items, "iers", "finals_all");
         assert_eq!(finals.info_url, Some("https://www.iers.org/IERS/EN/DataProducts/EarthOrientationData/eop.html"));
-        let starlink = items.iter().find(|p| p.name == "starlink").unwrap();
+        let starlink = find(&items, "celestrak", "starlink");
         assert_eq!(starlink.info_url, Some("https://celestrak.org/NORAD/documentation/gp-data-formats.php"));
         // cadence_label defaults to None (interval fallback covers current products)
         assert_eq!(finals.cadence_label, None);
